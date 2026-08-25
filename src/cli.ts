@@ -237,6 +237,7 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
         brain,
         driver,
         sessionDir,
+        mail: mail && box ? { provider: mail.provider, box } : undefined,
       });
 
       writeFileSync(
