@@ -53,7 +53,7 @@ Definitions:
       const text = await brain.ask(prompt);
       const parsed = extractScores(text);
       if (!parsed) return null;
-      return render(parsed);
+      return renderScorecard(parsed);
     } catch (e) {
       console.error(
         `  [${this.id}] expert failed: ${(e as Error).message.slice(0, 160)}`,
@@ -75,16 +75,20 @@ function extractScores(text: string): Scores | null {
   return valid ? parsed : null;
 }
 
-function render(scores: Scores): string {
+export function renderScorecard(scores: Scores): string {
   const lines = [
     `| Dimension | Score | Notes |`,
     `|-----------|-------|-------|`,
   ];
   let total = 0;
   for (const d of DIMENSIONS) {
-    total += scores[d].score;
-    const bar = "█".repeat(Math.round(scores[d].score)) + "░".repeat(10 - Math.round(scores[d].score));
-    lines.push(`| ${d.replace(/_/g, " ")} | \`${bar}\` ${scores[d].score}/10 | ${scores[d].note} |`);
+    // models occasionally answer outside the range they were given; an
+    // unclamped bar calls repeat() with a negative count, throws RangeError,
+    // and the caller's catch silently discards the entire scorecard
+    const score = Math.max(0, Math.min(10, Math.round(scores[d].score)));
+    total += score;
+    const bar = "█".repeat(score) + "░".repeat(10 - score);
+    lines.push(`| ${d.replace(/_/g, " ")} | \`${bar}\` ${score}/10 | ${scores[d].note} |`);
   }
   lines.push("");
   lines.push(`**Overall: ${(total / DIMENSIONS.length).toFixed(1)}/10**`);
