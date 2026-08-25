@@ -54,20 +54,30 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & { ask(prompt: strin
       const basePrompt = buildPrompt(ctx);
       let lastError = "";
 
-      for (let attempt = 0; attempt < 2; attempt++) {
+      // 3 attempts with backoff — transient rate limits must not kill OTP runs
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) {
+          await new Promise((r) => setTimeout(r, 20_000 * attempt));
+        }
         const prompt =
           attempt === 0
             ? basePrompt
             : `${basePrompt}\n\nIMPORTANT: Your previous reply was not valid JSON (${lastError}). Reply with ONLY the JSON object, nothing else.`;
 
-        const text = await runOnce(prompt);
+        let text: string;
+        try {
+          text = await runOnce(prompt);
+        } catch (e) {
+          lastError = (e as Error).message;
+          continue;
+        }
         const parsed = tryParseDecision(text);
         if ("decision" in parsed) return parsed.decision;
         lastError = parsed.error;
       }
 
       throw new Error(
-        `${opts.name} failed to produce a valid decision after retry: ${lastError}`,
+        `${opts.name} failed to produce a valid decision after 3 attempts: ${lastError}`,
       );
     },
   };

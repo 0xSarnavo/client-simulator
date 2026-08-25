@@ -12,7 +12,7 @@ import { buildVerificationPrompt } from "./brain/prompt.js";
 import { parseVerdict } from "./brain/adapters/cli-brain.js";
 import { FORBIDDEN_URL_PATTERNS } from "./types.js";
 import type { MailProvider, Mailbox, MailMessage } from "./mail/types.js";
-import { formatMessages } from "./mail/types.js";
+import { extractCodes } from "./mail/types.js";
 
 export interface SessionOptions {
   url: string;
@@ -270,7 +270,22 @@ async function checkInbox(
       exhausted ? " — you have now waited longer than your patience allows. You are done waiting; abandon or find another way." : ""
     }`;
   }
-  return `${msgs.length} new message(s):\n\n${formatMessages(msgs)}`;
+
+  // every email format is different — render each message and let the brain see it
+  const parts: string[] = [`${msgs.length} new message(s):`];
+  for (let i = 0; i < Math.min(msgs.length, 2); i++) {
+    const m = msgs[i];
+    const codes = extractCodes(m.subject, m.text);
+    const shot = `${opts.sessionDir}/shots/email-${i + 1}.png`;
+    const shotPath = opts.driver.emailScreenshot(m.text, shot);
+    parts.push(`mail #${i + 1} from ${m.from} — subject: ${m.subject}`);
+    if (codes.length) parts.push(`  candidate codes (may include junk): ${codes.join(", ")}`);
+    const saved = await shotPath;
+    if (saved) {
+      parts.push(`  SCREENSHOT of this email: ${saved} — READ IT to find the real code visually`);
+    }
+  }
+  return parts.join("\n");
 }
 
 function isStuck(events: StepEvent[]): boolean {
