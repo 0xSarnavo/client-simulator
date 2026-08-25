@@ -116,24 +116,24 @@ function setupMail(): { provider: MailProvider } | null {
 }
 
 function printUsage() {
-  console.log(`client-sim - synthetic clients that walk your onboarding and report where they leave
+  console.log(`client-simulator - synthetic clients that walk your onboarding and report where they leave
 
 USAGE:
-  client-sim visit <url> [options]      stage 1: spawn persona runs (one session per persona)
-  client-sim report [dirs]              stage 2: aggregate funnel report across sessions
-  client-sim fix <dirs...> [options]    stage 3: expert panel reviews sessions -> FIXES.md
-  client-sim all <url> [options]        run 1 -> 2 -> 3 together
-  client-sim doctor [--force]           verify environment (runs automatically on first visit)
-  client-sim personas [--new "Name"]    list personas / scaffold a custom one
-  client-sim personas generate          AI-builds a persona graph from your ideal-customer
+  client-simulator visit <url> [options]      stage 1: spawn persona runs (one session per persona)
+  client-simulator report [dirs]              stage 2: aggregate funnel report across sessions
+  client-simulator fix <dirs...> [options]    stage 3: expert panel reviews sessions -> FIXES.md
+  client-simulator all <url> [options]        run 1 -> 2 -> 3 together
+  client-simulator doctor [--force]           verify environment (runs automatically on first visit)
+  client-simulator personas [--new "Name"]    list personas / scaffold a custom one
+  client-simulator personas generate          AI-builds a persona graph from your ideal-customer
                                         description (+ optional --site scrape):
                                           --from "who buys this" --site <url> --count 4
-  client-sim mailtest                   test mailbox create/receive/extract/destroy
+  client-simulator mailtest                   test mailbox create/receive/extract/destroy
 
 OPTIONS:
   --persona <list>            explicit persona queue, e.g. cold,warm,hot (max 10)
   --runs <n>                  number of prospects, personas chosen at random (max 10)
-  --brain <claude|opencode>   which AI CLI plays the client (default: claude)
+  --brain <claude|opencode|codex>   which AI CLI plays the client (default: claude)
   --headless                  run browser without a visible window
   --mobile                    run at phone viewport (390×844, touch) instead of desktop
   --force                     re-run checks / regenerate outputs even if up to date
@@ -293,7 +293,7 @@ async function report(dirs: string[] | undefined, force = false) {
   const targets = dirs?.length ? dirs : latestSessionDirs();
   if (targets.length === 0) {
     console.error(
-      "Nothing to report on. Stage 2 needs stage 1 output — run `client-sim visit <url>` first.",
+      "Nothing to report on. Stage 2 needs stage 1 output — run `client-simulator visit <url>` first.",
     );
     process.exit(1);
   }
@@ -341,14 +341,14 @@ function latestSessionDirs(): string[] {
 async function fix(dirs: string[], brainName?: string, force = false) {
   if (dirs.length === 0) {
     console.error(
-      "Usage: client-sim fix <dir> [moreDirs...] [--brain ...] [--force]",
+      "Usage: client-simulator fix <dir> [moreDirs...] [--brain ...] [--force]",
     );
     process.exit(1);
   }
 
   if (!existsSync(`runs/AGGREGATE.md`)) {
     console.error(
-      "Stage 3 needs stage 2 — no runs/AGGREGATE.md found. Run `client-sim report` first (or add --force to skip the aggregate).",
+      "Stage 3 needs stage 2 — no runs/AGGREGATE.md found. Run `client-simulator report` first (or add --force to skip the aggregate).",
     );
     process.exit(1);
   }
@@ -516,7 +516,7 @@ async function personasGenerate(rest: string[]) {
 
   if (!description) {
     console.error(
-      '\n  Need to know who your ideal customers are. Either:\n    client-sim personas generate --from "CTOs and platform engineers at Series B startups"\n    ...or run interactively and answer the prompt.',
+      '\n  Need to know who your ideal customers are. Either:\n    client-simulator personas generate --from "CTOs and platform engineers at Series B startups"\n    ...or run interactively and answer the prompt.',
     );
     process.exit(1);
   }
@@ -535,7 +535,7 @@ async function personasGenerate(rest: string[]) {
     console.log(`\n  ✓ ${written.length} persona file(s) written to personas/:`);
     for (const p of written) console.log(`    ${p.id}.yaml — ${p.name} (${p.temperature})`);
     console.log(`\n  Run them:`);
-    console.log(`    client-sim visit <url> --persona ${written.map((p) => p.id).join(",")}\n`);
+    console.log(`    client-simulator visit <url> --persona ${written.map((p) => p.id).join(",")}\n`);
   } catch (e) {
     console.error(`\n  generation failed: ${(e as Error).message.slice(0, 200)}\n`);
     process.exit(1);
@@ -548,13 +548,13 @@ function personasCommand(args: string[]) {
     const nameIdx = args.indexOf("--new");
     const name = args[nameIdx + 1];
     if (!name || name.startsWith("--")) {
-      console.error("Usage: client-sim personas --new \"Persona Name\"");
+      console.error("Usage: client-simulator personas --new \"Persona Name\"");
       process.exit(1);
     }
     try {
       const path = newPersonaFile(name);
       console.log(`\n  ✓ created ${path}`);
-      console.log(`  Edit it, then use: client-sim visit <url> --persona ${path.split("/").pop()?.replace(/\.yaml$/, "")}\n`);
+      console.log(`  Edit it, then use: client-simulator visit <url> --persona ${path.split("/").pop()?.replace(/\.yaml$/, "")}\n`);
     } catch (e) {
       console.error((e as Error).message);
       process.exit(1);
@@ -576,7 +576,7 @@ function personasCommand(args: string[]) {
     console.log(`\n  ⚠ invalid persona files (not loaded):`);
     for (const e of errors) console.log(`    ${e.file}: ${e.error}`);
   }
-  console.log(`\n  Add your own: client-sim personas --new "My Persona"  →  personas/<id>.yaml\n`);
+  console.log(`\n  Add your own: client-simulator personas --new "My Persona"  →  personas/<id>.yaml\n`);
 }
 
 async function main() {
@@ -604,7 +604,7 @@ async function main() {
     case "visit": {
       const url = positionals[0];
       if (!url) {
-        console.error("Usage: client-sim visit <url> [--persona cold,warm,hot]");
+        console.error("Usage: client-simulator visit <url> [--persona cold,warm,hot]");
         process.exit(1);
       }
       await visit(url, common);
@@ -626,7 +626,7 @@ async function main() {
     case "all": {
       const url = positionals[0];
       if (!url) {
-        console.error("Usage: client-sim all <url> [--persona cold,warm,hot]");
+        console.error("Usage: client-simulator all <url> [--persona cold,warm,hot]");
         process.exit(1);
       }
       await all(url, common);
@@ -647,7 +647,7 @@ async function main() {
       break;
     }
     default:
-      // legacy style: client-sim <url> ...
+      // legacy style: client-simulator <url> ...
       await visit([command, ...positionals][0], common);
       break;
   }

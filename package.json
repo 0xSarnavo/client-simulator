@@ -1,10 +1,10 @@
 {
-  "name": "client-sim",
+  "name": "client-simulator",
   "version": "0.1.0",
   "description": "Synthetic client agents that walk through any website's onboarding like real humans, think out loud, and report where and why they drop off.",
   "type": "module",
   "bin": {
-    "client-sim": "./dist/cli.js"
+    "client-simulator": "./dist/cli.js"
   },
   "main": "dist/cli.js",
   "scripts": {

@@ -1,8 +1,8 @@
-# AGENTS.md — client-sim operating manual
+# AGENTS.md — client-simulator operating manual
 
-Instructions for AI coding agents (and humans) operating **client-sim**: a CLI that sends synthetic client personas through any website's onboarding. Personas think out loud, complete or abandon the flow like real users, and produce drop-off reports.
+Instructions for AI coding agents (and humans) operating **client-simulator**: a CLI that sends synthetic client personas through any website's onboarding. Personas think out loud, complete or abandon the flow like real users, and produce drop-off reports.
 
-## What client-sim does
+## What client-simulator does
 
 Simulated prospects visit a target URL in a real browser (Playwright). At each step an AI CLI — playing a persona — sees an accessibility snapshot and decides the next action: click, type, scroll, check email, pause, abandon. Everything is logged. Expert agents then review sessions and produce fix recommendations.
 
@@ -21,11 +21,11 @@ Requirements: Node 20+, and at least one AI CLI logged in via subscription (no A
 **Verify environment (runs automatically on first visit):**
 
 ```bash
-client-sim doctor          # deep check incl. live brain call + mailbox test
-client-sim doctor --force  # re-run even if recently verified
+client-simulator doctor          # deep check incl. live brain call + mailbox test
+client-simulator doctor --force  # re-run even if recently verified
 ```
 
-Results are cached in `.clientsim-state.json` (gitignored) for 7 days — checks don't re-run every time.
+Results are cached in `.clientsimulator-state.json` (gitignored) for 7 days — checks don't re-run every time.
 
 **Optional — email verification support (OTP/magic links):** create `.env` in the project root:
 
@@ -36,7 +36,7 @@ CLIENTSIM_IMAP_PASS="xxxx xxxx xxxx xxxx"   # Gmail app password
 CLIENTSIM_MAIL_DOMAIN="yourdomain.com"      # domain with catch-all → your inbox
 ```
 
-Requires a domain whose catch-all forwards to the IMAP inbox. Without it, personas treat "check your email" walls as drop-off points (still valid data). Test with `client-sim mailtest`.
+Requires a domain whose catch-all forwards to the IMAP inbox. Without it, personas treat "check your email" walls as drop-off points (still valid data). Test with `client-simulator mailtest`.
 
 ## The three stages
 
@@ -45,11 +45,11 @@ Stages are gated: report needs visit output; fix needs the aggregate report. Re-
 ### Stage 1 — visit (send prospects)
 
 ```bash
-client-sim visit <url>                          # interactive: asks how many cold/warm/hot (max 10 total)
-client-sim visit <url> --persona cold           # one cold prospect
-client-sim visit <url> --persona cold,warm,hot  # exact queue, in order (max 10)
-client-sim visit <url> --runs 6                 # 6 prospects, personas random
-client-sim visit <url> --headless               # no visible browser
+client-simulator visit <url>                          # interactive: asks how many cold/warm/hot (max 10 total)
+client-simulator visit <url> --persona cold           # one cold prospect
+client-simulator visit <url> --persona cold,warm,hot  # exact queue, in order (max 10)
+client-simulator visit <url> --runs 6                 # 6 prospects, personas random
+client-simulator visit <url> --headless               # no visible browser
 ```
 
 Interactive mode asks for counts per persona (0–10 each), then shuffles the queue randomly so the site sees a natural mix. Runs execute one by one; each prints a live thought stream and finishes with a verdict (COMPLETED / ABANDONED / GUARDRAIL).
@@ -57,22 +57,22 @@ Interactive mode asks for counts per persona (0–10 each), then shuffles the qu
 ### Stage 2 — report (aggregate)
 
 ```bash
-client-sim report            # aggregates ALL sessions in runs/ -> runs/AGGREGATE.md
-client-sim report <dir>...   # aggregate specific sessions only
+client-simulator report            # aggregates ALL sessions in runs/ -> runs/AGGREGATE.md
+client-simulator report <dir>...   # aggregate specific sessions only
 ```
 
 ### Stage 3 — fix (expert panel)
 
 ```bash
-client-sim fix runs/<dir>            # panel reviews that session -> FIXES.md
-client-sim fix runs/<dir1> runs/<dir2>
-client-sim fix <dir> --brain opencode  # use a different brain for experts
+client-simulator fix runs/<dir>            # panel reviews that session -> FIXES.md
+client-simulator fix runs/<dir1> runs/<dir2>
+client-simulator fix <dir> --brain opencode  # use a different brain for experts
 ```
 
 ### Pipeline
 
 ```bash
-client-sim all <url> --persona cold,warm,hot   # visit -> report -> fix in one go
+client-simulator all <url> --persona cold,warm,hot   # visit -> report -> fix in one go
 ```
 
 ## Brains
@@ -97,16 +97,16 @@ Each persona has `otp_patience_seconds` — waiting too long for a verification 
 ### Custom personas (YAML)
 
 ```bash
-client-sim personas                    # list all (built-in + custom)
-client-sim personas --new "My Persona" # scaffold personas/my-persona.yaml
-client-sim personas generate           # AI-builds a persona graph (see below)
+client-simulator personas                    # list all (built-in + custom)
+client-simulator personas --new "My Persona" # scaffold personas/my-persona.yaml
+client-simulator personas generate           # AI-builds a persona graph (see below)
 ```
 
 #### Persona generator (AI-built persona graphs)
 
 ```bash
-client-sim personas generate --from "who buys this" --site <url> --count 4
-client-sim personas generate   # interactive: asks for site + description
+client-simulator personas generate --from "who buys this" --site <url> --count 4
+client-simulator personas generate   # interactive: asks for site + description
 ```
 
 How it works:
@@ -135,7 +135,7 @@ traits:                      # free-text personality lines — these steer the L
   - "leaves immediately if a credit card is required for a trial"
 ```
 
-Traits are the personality lever — write them like a character brief, first-person reactions the LLM should mimic. Invalid files are listed with reasons by `client-sim personas` and skipped (never crash runs).
+Traits are the personality lever — write them like a character brief, first-person reactions the LLM should mimic. Invalid files are listed with reasons by `client-simulator personas` and skipped (never crash runs).
 
 ## Safety (hard-coded, non-negotiable)
 
@@ -155,15 +155,15 @@ runs/
     meta.json       # machine-readable metadata for stages 2-3
     FIXES.md        # expert panel findings (after stage 3)
   AGGREGATE.md      # cross-session funnel report (after stage 2)
-.clientsim-state.json  # doctor verification cache (gitignored)
+.clientsimulator-state.json  # doctor verification cache (gitignored)
 .env                   # mail config (gitignored)
 ```
 
 ## Useful commands
 
 ```bash
-client-sim doctor      # verify environment
-client-sim mailtest    # mailbox create/receive/extract/destroy lifecycle test
+client-simulator doctor      # verify environment
+client-simulator mailtest    # mailbox create/receive/extract/destroy lifecycle test
 npm run build          # compile (source is TypeScript in src/)
 npm run typecheck      # tsc --noEmit
 ```
@@ -177,7 +177,7 @@ npm run typecheck      # tsc --noEmit
 
 ## Tips for agents operating this tool
 
-1. Always run `client-sim doctor` first on a new machine.
+1. Always run `client-simulator doctor` first on a new machine.
 2. Prefer `--headless` in CI/automation; headed mode is better for watching behavior live.
 3. Read `runs/AGGREGATE.md` before individual reports — verdict summary first, details second.
 4. `FIXES.md` sections are independent per expert; cite evidence lines when discussing fixes.
