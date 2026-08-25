@@ -151,20 +151,22 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
       break;
     }
 
-    // GUARDRAIL: identical-action loop
-    if (isStuck(events)) {
+    // GUARDRAIL: repeating action pattern
+    const loop = stuckPattern([...events, event]);
+    if (loop) {
       events.push(event);
       appendFileSync(jsonlPath, JSON.stringify(event) + "\n");
       exit = {
         kind: "guardrail",
-        detail: `Stuck loop detected at step ${step}: same action repeated 3 times on ${snap.url}`,
+        detail: `Stuck loop detected at step ${step}: ${loop} on ${snap.url}`,
       };
       break;
     }
 
-    // LOG
+    // Fix 3: the JSONL line is written at the END of the step, so overrides and
+    // action failures recorded below actually reach the file the experts read.
     events.push(event);
-    appendFileSync(jsonlPath, JSON.stringify(event) + "\n");
+    const commit = () => appendFileSync(jsonlPath, JSON.stringify(event) + "\n");
 
     // ACT — check_email is handled by the mail layer, not the browser
     if (decision.action.type === "check_email") {
@@ -174,6 +176,7 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
         return emailWaitSeconds > (persona.otp_patience_seconds ?? 180);
       });
       consecutiveFailures = 0;
+      commit();
       continue; // no page change; next think sees the inbox result
     }
 
@@ -202,8 +205,11 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
     } catch (e) {
       consecutiveFailures++;
       failedHint = `${actionSummary(decision)} — ${trim((e as Error).message, 120)}`;
+      // failures were previously invisible to stages 2-3: only the next prompt saw them
+      event.note = [event.note, `action failed: ${failedHint}`].filter(Boolean).join(" | ");
       console.log(`  ⚠ action failed (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${trim(failedHint, 90)}`);
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        commit();
         exit = {
           kind: "guardrail",
           detail: `${consecutiveFailures} consecutive actions failed ending at step ${step} — page or element appears broken`,
@@ -211,6 +217,7 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
         break;
       }
     }
+    commit();
   }
 
   if (!exit) {
@@ -288,14 +295,34 @@ async function checkInbox(
   return parts.join("\n");
 }
 
-function isStuck(events: StepEvent[]): boolean {
-  if (events.length < 3) return false;
-  const sig = (e: StepEvent) => JSON.stringify(e.decision.action);
-  const a = sig(events[events.length - 1]);
-  return (
-    sig(events[events.length - 2]) === a &&
-    sig(events[events.length - 3]) === a
-  );
+/**
+ * Detect a repeating action pattern, not just an identical one.
+ *
+ * The old check only caught the same action three times running, so an A-B-A-B
+ * ping-pong between two pages ran until patience was exhausted — every step
+ * paying for a full page snapshot. Cycle lengths up to 3 are checked, each
+ * needing enough repetitions that ordinary exploration cannot trip it.
+ */
+export function stuckPattern(events: StepEvent[]): string | null {
+  const sigs = events.map((e) => JSON.stringify(e.decision.action));
+  // period -> repetitions required before we call it a loop
+  const PATTERNS: [number, number][] = [
+    [1, 3], // same action 3x
+    [2, 3], // A-B-A-B-A-B
+    [3, 2], // A-B-C-A-B-C
+  ];
+  for (const [period, reps] of PATTERNS) {
+    const span = period * reps;
+    if (sigs.length < span) continue;
+    const tail = sigs.slice(-span);
+    const first = tail.slice(0, period);
+    if (tail.every((sig, i) => sig === first[i % period])) {
+      return period === 1
+        ? `same action repeated ${reps} times`
+        : `${period}-step loop repeated ${reps} times`;
+    }
+  }
+  return null;
 }
 
 function actionSummary(d: Decision): string {
