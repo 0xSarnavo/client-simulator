@@ -19,15 +19,22 @@ Runs on AI CLI subscriptions (Claude Code, opencode, Codex). No API keys. No per
 
 ## What you get per test
 
+Sessions are filed by site, then by date, so a site's history reads chronologically:
+
 ```text
-runs/<timestamp>-<persona>/
+runs/<site>/<date>/<time>-<persona>/
 ├── report.md        verdict, drop-off point, reason in the client's words, confusion curve
 ├── session.jsonl    every thought, emotion, and action, step by step
 ├── video.webm       full recording of the browser session
 ├── shots/           screenshot of every step
-├── meta.json        machine-readable metadata
+├── meta.json        machine-readable metadata (incl. brain, model, effort)
 └── FIXES.md         7 experts' findings after stage 3
+
+runs/<site>/AGGREGATE.md    funnel across every run against that site
 ```
+
+`video.webm` is VP8 WebM. macOS opens it with QuickTime by default, which cannot
+decode WebM — use a browser (`open -a "Brave Browser" video.webm`) or VLC.
 
 A sample abandonment, real output:
 
@@ -67,6 +74,7 @@ Useful flags:
 | `--brain opencode` | which AI CLI to use — prompted if omitted |
 | `--model opus` | pin the model — prompted if omitted |
 | `--effort high` | reasoning depth — prompted if omitted |
+| `--plan` | re-run the first-visit site read on a known site |
 | `--mobile` | phone viewport (390×844, touch) |
 | `--headless` | no browser window |
 | `--force` | redo a stage even if up to date |
@@ -78,6 +86,29 @@ Stages are gated: `report` needs sessions, `fix` needs a report. Re-running with
 
 ---
 
+## First visit to a site
+
+The first time you point it at a site, it reads the landing page and asks how you
+want to test — so you're choosing personas with the page in front of you instead
+of guessing:
+
+```text
+  New site — yoursite.com
+
+  Product   Team knowledge base with AI-powered search
+  For       Ops and support leads at mid-size companies
+  Main CTA  "Start free trial" → email signup, no card required
+
+  How do you want to test it?
+  ❯ built-in personas       cold / warm / hot — start now
+    generate for this site  personas fitted to this page
+    both                    generate a set, then also pick built-in counts
+```
+
+Pick *generate* and you get a persona set built for that page, printed as a
+coverage summary, then a checklist of which ones actually run. Later visits to the
+same site skip straight to persona counts; `--plan` brings it back.
+
 ## Personas
 
 Three built in: **cold** (skeptical first-timer), **warm** (evaluating alternatives), **hot** (ready to buy).
@@ -86,10 +117,26 @@ Three ways to add more:
 
 ```bash
 client-simulator personas --new "Budget Bianca"   # scaffold a YAML, edit it
-client-simulator personas generate --site <url> --from "who buys this" --count 4
+client-simulator personas generate --site <url> --count 6
+client-simulator personas generate --from "who buys this" --count 6
 ```
 
-The generator scrapes your site, then builds a persona graph: core ideal customers plus nearest-neighbor variants (different roles, company sizes, industries). Any `.yaml` in `personas/` auto-loads. Only `name`, `temperature`, and `goal` are required.
+The generator scrapes your site and builds a set spanning everyone who actually
+lands on it, not variations on one ideal buyer:
+
+| Tier | Who |
+|---|---|
+| `core` | your ideal customers, most likely to convert |
+| `adjacent` | different roles, seniorities, company sizes, industries |
+| `edge` | people who land here but aren't the target — no budget, wrong use case, a competitor sizing you up, someone who clicked the wrong ad |
+
+It also spreads across circumstances that decide whether onboarding works at all:
+low tech comfort, keyboard-only and screen-reader users, skim readers, the
+privacy-sensitive, and the price-first. `--from` is optional when you pass
+`--site` — the audience is inferred from the page.
+
+`personas/` is created on demand; any `.yaml` in it auto-loads. Only `name`,
+`temperature`, and `goal` are required.
 
 ---
 

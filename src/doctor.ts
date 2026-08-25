@@ -152,14 +152,16 @@ function printQuickStart() {
   ${"─".repeat(58)}
   Ready. Common commands:
 
+  client-simulator                                  guided wizard, no flags needed
   client-simulator visit <url>                      interactive: pick persona counts
   client-simulator visit <url> --persona cold       single persona
   client-simulator visit <url> --persona cold,warm,hot --brain opencode
-  client-simulator report                           aggregate all sessions
-  client-simulator fix runs/<dir>                   expert panel -> FIXES.md
+  client-simulator report                           per-site funnel reports
+  client-simulator fix runs/<site>/<date>/<run>     expert panel -> FIXES.md
   client-simulator all <url>                        visit -> report -> fix
 
-  Brains: --brain claude (default) | --brain opencode
+  Sessions land in runs/<site>/<date>/<time>-<persona>/
+  Brains: --brain claude (default) | --brain opencode | --brain codex
   Full guide: AGENTS.md
   ${"─".repeat(58)}
 `);

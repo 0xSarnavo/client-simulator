@@ -1,31 +1,53 @@
 import { makeCliBrain } from "./cli-brain.js";
+import type { BrainRole } from "../roles.js";
 
 interface ClaudeJsonOutput {
   result?: string;
 }
 
-export const claudeBrain = makeCliBrain({
-  name: "claude",
-  command: "claude",
-  args: (prompt, sessionId, model, effort) => [
-    "-p",
-    prompt,
-    ...(model ? ["--model", model] : []),
-    ...(effort ? ["--effort", effort] : []),
-    "--output-format",
-    "json",
-    ...(sessionId ? ["--resume", sessionId] : []),
-  ],
-  // claude echoes its session_id in every JSON response — resume it next call
-  parseSessionId: (output) =>
-    output.match(/"session_id"\s*:\s*"([^"]+)"/)?.[1],
-  extractText: (stdout) => {
-    try {
-      const parsed = JSON.parse(stdout) as ClaudeJsonOutput;
-      if (parsed.result) return parsed.result;
-    } catch {
-      // fall through to raw stdout
-    }
-    return stdout;
-  },
-});
+/**
+ * Tools cost ~5k tokens of schema on every call and widen what the model can do.
+ *
+ * A persona keeps only Read, so it can look at its own screenshot but cannot
+ * shell out, fetch the URL directly, or read the project it is running against.
+ * Experts keep the tools their prompts actually invite (reading screenshots and
+ * curling the page for raw HTML).
+ */
+const PERSONA_DISALLOWED = [
+  "Bash", "BashOutput", "KillShell", "Write", "Edit", "NotebookEdit",
+  "WebFetch", "WebSearch", "Task", "Glob", "Grep", "TodoWrite", "SlashCommand",
+];
+
+const EXPERT_DISALLOWED = ["Write", "Edit", "NotebookEdit", "Task", "TodoWrite", "SlashCommand"];
+
+export function createClaudeBrain(role: BrainRole = "persona") {
+  const disallowed = role === "expert" ? EXPERT_DISALLOWED : PERSONA_DISALLOWED;
+  return makeCliBrain({
+    name: "claude",
+    command: "claude",
+    // no --resume: each call is self-contained and the prompt carries the
+    // journey, so context cannot grow without bound across a run
+    args: (prompt, { model, effort, allowDir }) => [
+      "-p",
+      prompt,
+      ...(model ? ["--model", model] : []),
+      ...(effort ? ["--effort", effort] : []),
+      // the CLI runs outside the project, so the session dir must be opted in
+      // explicitly or Read cannot reach the screenshots
+      ...(allowDir ? ["--add-dir", allowDir] : []),
+      "--disallowed-tools",
+      disallowed.join(","),
+      "--output-format",
+      "json",
+    ],
+    extractText: (stdout) => {
+      try {
+        const parsed = JSON.parse(stdout) as ClaudeJsonOutput;
+        if (parsed.result) return parsed.result;
+      } catch {
+        // fall through to raw stdout
+      }
+      return stdout;
+    },
+  });
+}

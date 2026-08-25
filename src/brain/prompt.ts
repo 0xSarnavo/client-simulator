@@ -122,6 +122,26 @@ ${ctx.ariaYaml}
 ${SCHEMA_INSTRUCTIONS}`;
 }
 
+/**
+ * Retry prompt for a reply that was not valid JSON.
+ *
+ * Self-contained on purpose: it only asks the model to reformat what it already
+ * wrote, so it needs no page context and costs a fraction of resending the whole
+ * step prompt.
+ */
+export function buildRepairPrompt(reply: string, error: string): string {
+  return `Your previous reply could not be parsed (${error}).
+
+This is exactly what you wrote:
+---
+${reply.slice(0, 4000)}
+---
+
+Rewrite it as ONE valid JSON object. Keep the same decision and wording — fix only the format.
+
+${SCHEMA_INSTRUCTIONS}`;
+}
+
 export function buildVerificationPrompt(ctx: {
   goal: string;
   ariaYaml: string;
