@@ -155,6 +155,20 @@ export class BrowserDriver {
     await video.saveAs(path).catch(() => {});
   }
 
+  /** Render an email's HTML off-screen and screenshot it — lets the brain SEE any OTP format */
+  async emailScreenshot(html: string, path: string): Promise<string> {
+    try {
+      const page = await this.context.newPage();
+      await page.setContent(html, { waitUntil: "networkidle", timeout: 15_000 }).catch(() => {});
+      await page.waitForTimeout(500);
+      await page.screenshot({ path, fullPage: true });
+      await page.close();
+      return path;
+    } catch {
+      return "";
+    }
+  }
+
   async close() {
     await this.context?.close().catch(() => {});
     await this.browser?.close().catch(() => {});
