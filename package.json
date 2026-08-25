@@ -10,7 +10,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/cli.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsc && node --test \"dist/**/*.test.js\""
   },
   "keywords": [
     "user-testing",
