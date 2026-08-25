@@ -3,6 +3,8 @@ import type { Brain, BrainContext, Decision } from "../../types.js";
 import { DecisionSchema, VerdictSchema } from "../../types.js";
 
 const TIMEOUT_MS = 180_000;
+/** Attempts per decision. Each attempt is its own CLI call, so this bounds cost. */
+export const MAX_DECIDE_ATTEMPTS = 3;
 /** Backoff after a failed CLI call (rate limit, timeout) — not after a bad reply. */
 const CALL_RETRY_BACKOFF_MS = 20_000;
 
@@ -47,7 +49,7 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
       let lastError = "";
       let lastReply = "";
 
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < MAX_DECIDE_ATTEMPTS; attempt++) {
         // a malformed reply only needs reformatting, so resend the reply rather
         // than the whole step prompt — the page snapshot dominates its size
         const prompt =
@@ -62,7 +64,7 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
           // the call itself failed — likely transient, so back off before retrying
           lastError = (e as Error).message;
           lastReply = "";
-          if (attempt < 2) {
+          if (attempt < MAX_DECIDE_ATTEMPTS - 1) {
             await new Promise((r) => setTimeout(r, CALL_RETRY_BACKOFF_MS * (attempt + 1)));
           }
           continue;
@@ -75,7 +77,7 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
       }
 
       throw new Error(
-        `${opts.name} failed to produce a valid decision after 3 attempts: ${lastError}`,
+        `${opts.name} failed to produce a valid decision after ${MAX_DECIDE_ATTEMPTS} attempts: ${lastError}`,
       );
     },
   };
