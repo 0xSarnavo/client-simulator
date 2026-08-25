@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { Mailbox, MailMessage, MailProvider } from "./types.js";
+import { htmlToText } from "./types.js";
+import { decodeRawMessage, pickBodyParts, type MimeNode } from "./mime.js";
 
 export interface ImapConfig {
   host: string;
@@ -12,6 +14,9 @@ export interface ImapConfig {
 }
 
 type ImapFlowClient = import("imapflow").ImapFlow;
+
+/** Cap a single body read — newsletters can be megabytes, and this text is prompted */
+const MAX_BODY_BYTES = 256 * 1024;
 
 /**
  * Ephemeral mailboxes on top of a catch-all IMAP inbox.
@@ -119,20 +124,26 @@ export class ImapProvider implements MailProvider {
             const key = `${folder}:${uid}`;
             if (this.seenFor(box).has(key)) continue;
             const msg = await c.fetchOne(String(uid), {
-              source: true,
+              bodyStructure: true,
               envelope: true,
               internalDate: true,
             });
-            if (!msg || typeof msg === "boolean" || !msg.source) continue;
+            if (!msg || typeof msg === "boolean") continue;
             const env = msg.envelope;
 
             this.seenFor(box).add(key);
+            const { text, html } = await this.readBody(
+              c,
+              uid,
+              msg.bodyStructure as MimeNode | undefined,
+            );
             out.push({
               from:
                 env?.from?.[0]?.address ?? env?.from?.[0]?.name ?? "unknown",
               subject: env?.subject ?? "(no subject)",
               date: msg.internalDate ? new Date(msg.internalDate) : undefined,
-              text: msg.source.toString(),
+              text,
+              html,
             });
           }
         } finally {
@@ -141,6 +152,51 @@ export class ImapProvider implements MailProvider {
       }
       return out;
     });
+  }
+
+  /**
+   * Read a message body with the transfer encoding already undone.
+   *
+   * The server decodes base64/quoted-printable for us, so codes survive intact.
+   * Falls back to the raw source only if the structure has no readable part.
+   */
+  private async readBody(
+    c: ImapFlowClient,
+    uid: number,
+    structure: MimeNode | undefined,
+  ): Promise<{ text: string; html?: string }> {
+    const parts = pickBodyParts(structure);
+
+    const grab = async (part?: string): Promise<string | undefined> => {
+      if (!part) return undefined;
+      try {
+        const dl = await c.download(String(uid), part, { uid: true, maxBytes: MAX_BODY_BYTES });
+        if (!dl?.content) return undefined;
+        const chunks: Buffer[] = [];
+        for await (const chunk of dl.content) chunks.push(chunk as Buffer);
+        return Buffer.concat(chunks).toString("utf8");
+      } catch {
+        return undefined;
+      }
+    };
+
+    const html = await grab(parts.html);
+    const plain = await grab(parts.plain);
+
+    if (plain || html) {
+      return { text: plain || htmlToText(html ?? ""), html };
+    }
+
+    // last resort: raw source, so a strange message is still better than nothing
+    try {
+      const dl = await c.download(String(uid), undefined, { uid: true, maxBytes: MAX_BODY_BYTES });
+      const chunks: Buffer[] = [];
+      if (dl?.content) for await (const chunk of dl.content) chunks.push(chunk as Buffer);
+      const decoded = decodeRawMessage(Buffer.concat(chunks).toString("utf8"));
+      return { text: decoded.text || htmlToText(decoded.html ?? ""), html: decoded.html };
+    } catch {
+      return { text: "" };
+    }
   }
 
   async destroy(box: Mailbox): Promise<void> {

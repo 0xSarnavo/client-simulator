@@ -284,7 +284,7 @@ async function checkInbox(
     const m = msgs[i];
     const codes = extractCodes(m.subject, m.text);
     const shot = `${opts.sessionDir}/shots/email-${i + 1}.png`;
-    const shotPath = opts.driver.emailScreenshot(m.text, shot);
+    const shotPath = opts.driver.emailScreenshot(m.html ?? m.text, shot);
     parts.push(`mail #${i + 1} from ${m.from} — subject: ${m.subject}`);
     if (codes.length) parts.push(`  candidate codes (may include junk): ${codes.join(", ")}`);
     const saved = await shotPath;
