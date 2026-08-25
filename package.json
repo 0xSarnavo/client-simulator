@@ -1,0 +1,34 @@
+{
+  "name": "client-sim",
+  "version": "0.1.0",
+  "description": "Synthetic client agents that walk through any website's onboarding like real humans, think out loud, and report where and why they drop off.",
+  "type": "module",
+  "bin": {
+    "client-sim": "./dist/cli.js"
+  },
+  "main": "dist/cli.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "user-testing",
+    "synthetic-users",
+    "playwright",
+    "onboarding",
+    "ux"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "execa": "^9.5.2",
+    "imapflow": "^1.7.2",
+    "playwright": "^1.49.1",
+    "yaml": "^2.9.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
