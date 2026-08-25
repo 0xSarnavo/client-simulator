@@ -286,6 +286,23 @@ personas/              # your custom persona YAML files
 
 ---
 
+## Testing your own site — read this first
+
+Bot protection and mail filtering are designed to stop automated visitors. Before testing a site you control:
+
+1. **Disable bot blockers for your test environment.** Cloudflare Turnstile / "Just a moment..." challenges, WAF rules, and rate-based bot detection will wall the client out before it sees your product. In Cloudflare: Security → WAF/Turnstile → add an allow rule for your test IP or skip the challenge on staging. (Sites you don't control: the client will report the bot wall as a finding — that's valid data, but you can't complete signup flows.)
+2. **Whitelist your mail path.** If your app rejects disposable/unknown domains, allow-list your catch-all domain (e.g. `yourdomain.com`) in your email validation, or the persona's address bounces at validation. On Gmail's side, first-time forwarded mail often lands in spam — mark it "not spam" once.
+3. **Staging over production.** Test against staging with test data; the client fills real forms and creates real accounts.
+
+Other known issues:
+
+- **CAPTCHAs** (hCaptcha, reCAPTCHA) can't be solved — the persona treats them as a wall and abandons with a report
+- **SMS/phone verification** is out of scope — same treatment
+- **Rate limits on signup emails** can starve the OTP flow (the persona waits `otp_patience_seconds`, then leaves in character)
+- **Headless browsers get blocked more** than headed ones — if a site challenges you, try headed mode (omit `--headless`)
+
+---
+
 ## Reading a report
 
 - **COMPLETED**: the persona achieved its goal (verified: a second brain call double-checks the claim before accepting it)
