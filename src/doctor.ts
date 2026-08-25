@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { execa } from "execa";
 
-const STATE_FILE = ".clientsim-state.json";
+const STATE_FILE = ".clientsimulator-state.json";
 const STATE_MAX_AGE_MS = 7 * 24 * 3600_000; // re-verify weekly
 
 interface DoctorResult {
@@ -152,12 +152,12 @@ function printQuickStart() {
   ${"─".repeat(58)}
   Ready. Common commands:
 
-  client-sim visit <url>                      interactive: pick persona counts
-  client-sim visit <url> --persona cold       single persona
-  client-sim visit <url> --persona cold,warm,hot --brain opencode
-  client-sim report                           aggregate all sessions
-  client-sim fix runs/<dir>                   expert panel -> FIXES.md
-  client-sim all <url>                        visit -> report -> fix
+  client-simulator visit <url>                      interactive: pick persona counts
+  client-simulator visit <url> --persona cold       single persona
+  client-simulator visit <url> --persona cold,warm,hot --brain opencode
+  client-simulator report                           aggregate all sessions
+  client-simulator fix runs/<dir>                   expert panel -> FIXES.md
+  client-simulator all <url>                        visit -> report -> fix
 
   Brains: --brain claude (default) | --brain opencode
   Full guide: AGENTS.md
@@ -210,7 +210,7 @@ export async function runDoctor(brainName = "claude", force = false): Promise<bo
     saveState(results);
     printQuickStart();
   } else {
-    console.error(`\n  ✗ Fix the ✗ items above, then run: client-sim doctor --force\n`);
+    console.error(`\n  ✗ Fix the ✗ items above, then run: client-simulator doctor --force\n`);
   }
   return allOk;
 }
