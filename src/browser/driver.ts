@@ -31,6 +31,35 @@ export class BrowserDriver {
       },
     });
     this.page = await this.context.newPage();
+
+    // Bulletproof popup/new-tab handling: always follow the newest page,
+    // return to the previous live page when a popup closes or crashes,
+    // and never strand the session on a dead page.
+    const pageStack: import("playwright").Page[] = [];
+    this.context.on("page", (page) => {
+      if (page === this.page || page.isClosed()) return;
+      pageStack.push(this.page);
+      this.page = page;
+      const revert = () => {
+        if (this.page !== page) return; // a newer page already took over
+        while (pageStack.length > 0) {
+          const prev = pageStack.pop()!;
+          if (!prev.isClosed()) {
+            this.page = prev;
+            return;
+          }
+        }
+        // every page is gone — open a fresh one so the session can continue
+        this.context
+          .newPage()
+          .then((p) => {
+            this.page = p;
+          })
+          .catch(() => {});
+      };
+      page.once("close", revert);
+      page.once("crash", revert);
+    });
   }
 
   async goto(url: string) {
