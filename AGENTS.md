@@ -38,6 +38,39 @@ CLIENTSIM_MAIL_DOMAIN="yourdomain.com"      # domain with catch-all → your inb
 
 Requires a domain whose catch-all forwards to the IMAP inbox. Without it, personas treat "check your email" walls as drop-off points (still valid data). Test with `client-simulator mailtest`.
 
+## Choosing the AI (brain, model, effort)
+
+Every command that calls an AI — `visit`, `all`, `fix`, `personas generate`,
+`doctor` — resolves three things: which CLI plays the client, which model, and
+how much reasoning effort. Pass them as flags or let it ask.
+
+```bash
+client-simulator visit <url>                                    # menus for all three
+client-simulator visit <url> --brain claude                     # menus for model + effort only
+client-simulator visit <url> --brain claude --model opus --effort high   # no menus
+```
+
+The menus are arrow-key driven and the lists are probed live from the CLI you
+pick, not hardcoded here:
+
+| Brain | Models from | Effort from |
+|---|---|---|
+| `claude` | `claude --help` aliases | `claude --help` (`low`…`max`) |
+| `codex` | `codex --help`, else a fallback list | `low\|medium\|high` |
+| `opencode` | `opencode models` | none — opencode has no effort knob, so it isn't asked |
+
+Both menus always offer **default** (leave the CLI's own setting alone) and, for
+models, **custom…** to type any id.
+
+**Automation:** with no TTY nothing is ever prompted — `--brain` falls back to
+`claude` and model/effort to the CLI's defaults. Always pass the flags explicitly
+in scripts and CI so runs are reproducible; a session records the brain, model,
+and effort it used in `meta.json`.
+
+**Zero-argument wizard:** running bare `client-simulator` opens a guided flow
+(command → url → brain → model → effort → persona counts). `--help` still prints
+the flag reference. Ctrl-C out of any menu exits cleanly with status 130.
+
 ## The three stages
 
 Stages are gated: report needs visit output; fix needs the aggregate report. Re-running a stage with no new data is a no-op ("up to date") — pass `--force` to regenerate.
@@ -81,6 +114,7 @@ client-simulator all <url> --persona cold,warm,hot   # visit -> report -> fix in
 |---|---|---|
 | `claude` (default) | Claude Code | Faster per step; persistent session via `--resume` |
 | `opencode` | opencode | Slower (~2–3×); persistent session via `-s`; needs `--print-logs` |
+| `codex` | Codex CLI | Stateless per call; journey memory comes from the prompt history |
 
 Any brain can run any stage. You can visit with one brain and run experts with another.
 
@@ -174,12 +208,18 @@ npm run typecheck      # tsc --noEmit
 - **Experts**: implement `Expert` in `src/experts/`, register in `src/experts/index.ts`
 - **Brains**: add an adapter in `src/brain/adapters/`, wire into `src/brain/index.ts`
 - **Mail providers**: implement `MailProvider` in `src/mail/types.ts`
+- **Brain discovery**: model/effort probing lives in `src/brain/catalog.ts`; add a
+  `BrainSpec` there so a new adapter shows up in the picker
+- **Prompts**: `src/ui/prompt.ts` holds the zero-dependency `select`/`text`
+  primitives (raw-mode TTY, silent defaults when not interactive)
 
 ## Tips for agents operating this tool
 
 1. Always run `client-simulator doctor` first on a new machine.
-2. Prefer `--headless` in CI/automation; headed mode is better for watching behavior live.
-3. Read `runs/AGGREGATE.md` before individual reports — verdict summary first, details second.
-4. `FIXES.md` sections are independent per expert; cite evidence lines when discussing fixes.
-5. Sessions are immutable artifacts — re-run `fix` with `--force` to regenerate advice, never re-visit to "fix" a report.
-6. A GUARDRAIL verdict is still valid data: it means the site blocked the client (stuck loop, broken page, payment wall), not that the tool failed.
+2. Pass `--brain`, `--model`, and `--effort` explicitly — an agent has no TTY, so
+   omitting them silently accepts defaults rather than prompting.
+3. Prefer `--headless` in CI/automation; headed mode is better for watching behavior live.
+4. Read `runs/AGGREGATE.md` before individual reports — verdict summary first, details second.
+5. `FIXES.md` sections are independent per expert; cite evidence lines when discussing fixes.
+6. Sessions are immutable artifacts — re-run `fix` with `--force` to regenerate advice, never re-visit to "fix" a report.
+7. A GUARDRAIL verdict is still valid data: it means the site blocked the client (stuck loop, broken page, payment wall), not that the tool failed.
