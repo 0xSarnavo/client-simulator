@@ -9,6 +9,7 @@ git clone https://github.com/0xSarnavo/client-simulator
 cd client-simulator && npm install && npm run build
 npx playwright install chromium
 node dist/cli.js doctor        # verifies your setup (2 min, once)
+node dist/cli.js               # guided wizard — pick everything from menus
 node dist/cli.js visit <url> --persona cold
 ```
 
@@ -47,6 +48,7 @@ Wanted answered: "Is your email verification service actually working?"
 ## Commands
 
 ```bash
+client-simulator                    # guided wizard: command, url, brain, model, effort
 client-simulator visit <url>        # test it (interactive: pick how many of each persona)
 client-simulator report             # aggregate all sessions into one funnel report
 client-simulator fix runs/<dir>     # expert panel reviews a session -> FIXES.md
@@ -62,10 +64,15 @@ Useful flags:
 |---|---|
 | `--persona cold,warm,hot` | exact queue (max 10) |
 | `--runs 6` | 6 prospects, random personas |
-| `--brain opencode` | swap the AI brain |
+| `--brain opencode` | which AI CLI to use — prompted if omitted |
+| `--model opus` | pin the model — prompted if omitted |
+| `--effort high` | reasoning depth — prompted if omitted |
 | `--mobile` | phone viewport (390×844, touch) |
 | `--headless` | no browser window |
 | `--force` | redo a stage even if up to date |
+
+Leave `--brain`, `--model`, or `--effort` off and you get an arrow-key menu instead.
+Pass them to skip the menus; in CI (no TTY) the defaults apply silently.
 
 Stages are gated: `report` needs sessions, `fix` needs a report. Re-running with nothing new does nothing. Full details in [AGENTS.md](AGENTS.md).
 
@@ -94,7 +101,23 @@ The generator scrapes your site, then builds a persona graph: core ideal custome
 | `opencode` | opencode subscription | ~2-3x slower |
 | `codex` | Codex CLI (`npm i -g @openai/codex`) | varies |
 
-No model is pinned. Each brain uses whatever your CLI is configured with. Mix freely: visit with one brain, review with another.
+Every AI command asks which brain to use, then which model and how much reasoning
+effort — nothing is pinned in this repo. The lists come from the CLI itself
+(`opencode models`, `claude --help`), so new models show up without an update here.
+Uninstalled CLIs appear greyed out rather than missing.
+
+```text
+  Which AI plays the client?
+
+  ❯ claude    Claude Code      ✓ 2.1.231
+    codex     Codex (ChatGPT)  ✗ not installed
+    opencode  opencode         ✓ 1.18.23
+
+  ↑↓ move · enter select · ctrl-c quit
+```
+
+Mix freely: visit with one brain, review with another. Each session records the
+brain, model, and effort that produced it in `meta.json`.
 
 ---
 

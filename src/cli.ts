@@ -16,6 +16,8 @@ import { ImapProvider } from "./mail/imap.js";
 import { extractCodes, extractLinks } from "./mail/types.js";
 import { runDoctor, doctorStateExists } from "./doctor.js";
 import { createInterface } from "node:readline/promises";
+import { resolveBrainChoice } from "./brain/picker.js";
+import { PromptCancelled, heading, isInteractive, select, text } from "./ui/prompt.js";
 
 const MAX_RUNS = 10;
 
@@ -130,15 +132,25 @@ USAGE:
                                           --from "who buys this" --site <url> --count 4
   client-simulator mailtest                   test mailbox create/receive/extract/destroy
 
+  Run \`client-simulator\` with no arguments for a guided wizard (pick command,
+  URL, brain, model and effort from menus instead of typing flags).
+
 OPTIONS:
   --persona <list>            explicit persona queue, e.g. cold,warm,hot (max 10)
   --runs <n>                  number of prospects, personas chosen at random (max 10)
-  --brain <claude|opencode|codex>   which AI CLI plays the client (default: claude)
-  --model <name>              pin the model (e.g. opus, sonnet, gpt-5.2); default = your CLI's own default
+  --brain <claude|opencode|codex>   which AI CLI plays the client (prompted if omitted)
+  --model <name>              pin the model (prompted if omitted; levels read live from the CLI)
+  --effort <level>            reasoning effort (prompted if omitted; claude: low..max,
+                              codex: low|medium|high, opencode: no effort knob)
   --headless                  run browser without a visible window
   --mobile                    run at phone viewport (390×844, touch) instead of desktop
   --force                     re-run checks / regenerate outputs even if up to date
   -h, --help                  show this help
+
+Any of --brain / --model / --effort you omit is asked for with an arrow-key menu;
+the model and effort lists are read live from the CLI you pick, so they stay
+current. Pass the flags to skip the prompts entirely (and in CI, where there is
+no TTY, the defaults apply silently).
 
 With no --persona and no --runs, visit asks interactively how many cold/warm/hot
 prospects to send, then shuffles the order randomly.
@@ -151,14 +163,18 @@ STAGE COMBINATIONS:
 interface CommonArgs {
   personas?: string[];
   runs?: number;
-  brain: string;
+  /** undefined until --brain is passed or the picker resolves it */
+  brain?: string;
   model?: string;
+  effort?: string;
   headless: boolean;
   mobile?: boolean;
+  /** set once the picker has run, so chained stages never ask twice */
+  brainResolved?: boolean;
 }
 
 function parseCommon(argv: string[]): CommonArgs {
-  const args: CommonArgs = { brain: "claude", headless: false, mobile: false };
+  const args: CommonArgs = { headless: false, mobile: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--personas" || a === "--persona")
@@ -166,6 +182,7 @@ function parseCommon(argv: string[]): CommonArgs {
     else if (a === "--runs") args.runs = parseInt(argv[++i], 10);
     else if (a === "--brain") args.brain = argv[++i];
     else if (a === "--model") args.model = argv[++i];
+    else if (a === "--effort") args.effort = argv[++i];
     else if (a === "--headless") args.headless = true;
     else if (a === "--mobile") args.mobile = true;
   }
@@ -182,17 +199,43 @@ async function resolveRunPlan(common: CommonArgs): Promise<string[]> {
   return promptRunPlan();
 }
 
-async function resolveBrain(name?: string, fallback = "claude", model?: string) {
+/**
+ * Resolve the brain for a stage, prompting for whatever the flags left open.
+ * Mutates `common` so chained stages (all -> fix) reuse the same answers
+ * instead of asking again.
+ */
+async function resolveBrain(common: CommonArgs, purpose?: string) {
   try {
-    return getBrain(name ?? fallback, model);
+    if (!common.brainResolved) {
+      const choice = await resolveBrainChoice(
+        { brain: common.brain, model: common.model, effort: common.effort },
+        purpose,
+      );
+      common.brain = choice.brain;
+      common.model = choice.model;
+      common.effort = choice.effort;
+      common.brainResolved = true;
+    }
+    return getBrain(common.brain ?? "claude", common.model, common.effort);
   } catch (e) {
+    if (e instanceof PromptCancelled) throw e;
     console.error((e as Error).message);
     process.exit(1);
   }
 }
 
+/** Human-readable summary of the resolved brain config, for run banners. */
+function describeRun(common: CommonArgs): string {
+  const parts = [`brain: ${common.brain ?? "claude"}`];
+  if (common.model) parts.push(`model: ${common.model}`);
+  if (common.effort) parts.push(`effort: ${common.effort}`);
+  return parts.join(" | ");
+}
+
 /** STAGE 1 — spawn persona visits. Returns created session dirs. */
 async function visit(url: string, common: CommonArgs): Promise<string[]> {
+  const brain = await resolveBrain(common, "Which AI plays the client?");
+
   // first-run initialization check (skipped silently once verified)
   if (!doctorStateExists()) {
     const ok = await runDoctor(common.brain);
@@ -210,12 +253,11 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
     }
   }
 
-  const brain = await resolveBrain(common.brain, "claude", common.model);
   const dirs: string[] = [];
   const mail = setupMail();
 
   console.log(
-    `\n  ${personaIds.length} prospect(s) queued: ${personaIds.join(", ")} | brain: ${brain.name}\n`,
+    `\n  ${personaIds.length} prospect(s) queued: ${personaIds.join(", ")} | ${describeRun(common)}\n`,
   );
 
   for (const pid of personaIds) {
@@ -245,11 +287,23 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
 
       writeFileSync(
         `${sessionDir}/report.md`,
-        generateReport({ persona, url, brain: brain.name, events, exit }),
+        generateReport({ persona, url, brain: describeRun(common), events, exit }),
       );
       writeFileSync(
         `${sessionDir}/meta.json`,
-        JSON.stringify({ url, personaId: pid, brain: brain.name, exit, viewport: common.mobile ? "mobile" : "desktop" }, null, 2),
+        JSON.stringify(
+          {
+            url,
+            personaId: pid,
+            brain: brain.name,
+            model: common.model ?? null,
+            effort: common.effort ?? null,
+            exit,
+            viewport: common.mobile ? "mobile" : "desktop",
+          },
+          null,
+          2,
+        ),
       );
       await driver.saveVideo(`${sessionDir}/video.webm`);
       dirs.push(sessionDir);
@@ -342,7 +396,7 @@ function latestSessionDirs(): string[] {
 }
 
 /** STAGE 3 — expert panel over sessions. Requires stage 2 (aggregate) unless forced. */
-async function fix(dirs: string[], brainName?: string, force = false, model?: string) {
+async function fix(dirs: string[], common: CommonArgs, force = false) {
   if (dirs.length === 0) {
     console.error(
       "Usage: client-simulator fix <dir> [moreDirs...] [--brain ...] [--force]",
@@ -357,7 +411,7 @@ async function fix(dirs: string[], brainName?: string, force = false, model?: st
     process.exit(1);
   }
 
-  const brain = await resolveBrain(brainName, "claude", model);
+  const brain = await resolveBrain(common, "Which AI runs the expert panel?");
   const sessions = loadSessions(dirs);
 
   if (sessions.length === 0) {
@@ -416,7 +470,8 @@ function dirLabel(dir: string): string {
 async function all(url: string, common: CommonArgs) {
   const dirs = await visit(url, common);
   await report(dirs, true);
-  await fix(dirs, common.brain, true);
+  // common now carries the resolved brain/model/effort — stage 3 reuses it verbatim
+  await fix(dirs, common, true);
   console.log(`\n  Pipeline complete: ${dirs.length} session(s), see runs/AGGREGATE.md + FIXES.md per session.\n`);
 }
 
@@ -477,9 +532,7 @@ async function mailtest() {
 
 /** Generate a persona graph from a description (+ optional site scrape) */
 async function personasGenerate(rest: string[]) {
-  const brain = await resolveBrain(
-    rest.includes("--brain") ? rest[rest.indexOf("--brain") + 1] : undefined,
-  );
+  const brain = await resolveBrain(parseCommon(rest), "Which AI writes your personas?");
 
   const flagValue = (name: string): string | undefined => {
     const i = rest.indexOf(name);
@@ -583,17 +636,101 @@ function personasCommand(args: string[]) {
   console.log(`\n  Add your own: client-simulator personas --new "My Persona"  →  personas/<id>.yaml\n`);
 }
 
+/** Normalize whatever the user typed into a fetchable URL. */
+async function askUrl(): Promise<string> {
+  const raw = await text({
+    message: "Site URL:",
+    validate: (v) =>
+      /^(https?:\/\/)?[^\s.\/]+\.[^\s]+$/.test(v) ? undefined : "that doesn't look like a URL",
+  });
+  return /^https?:\/\//.test(raw) ? raw : `https://${raw}`;
+}
+
+/**
+ * Zero-argument entry point: a guided wizard over every stage, so nothing has
+ * to be memorised. Falls back to the usage text when there is no TTY.
+ */
+async function wizard() {
+  if (!isInteractive()) {
+    printUsage();
+    process.exit(1);
+  }
+
+  heading("client-simulator");
+  const action = await select({
+    message: "What do you want to do?",
+    choices: [
+      { value: "visit", label: "visit", hint: "send synthetic clients through a site" },
+      { value: "all", label: "all", hint: "visit -> report -> fix, one shot" },
+      { value: "report", label: "report", hint: "aggregate past sessions into a funnel" },
+      { value: "fix", label: "fix", hint: "expert panel on a past session" },
+      { value: "personas", label: "personas", hint: "list or generate personas" },
+      { value: "doctor", label: "doctor", hint: "verify your environment" },
+    ],
+  });
+
+  const common: CommonArgs = { headless: false, mobile: false };
+
+  switch (action) {
+    case "visit":
+      await visit(await askUrl(), common);
+      break;
+    case "all":
+      await all(await askUrl(), common);
+      break;
+    case "report":
+      await report(undefined, false);
+      break;
+    case "fix": {
+      const dirs = latestSessionDirs();
+      if (dirs.length === 0) {
+        console.error("\n  No sessions to review yet — run a visit first.\n");
+        process.exit(1);
+      }
+      const dir = await select({
+        message: "Which session?",
+        choices: [...dirs].reverse().map((d) => ({ value: d, label: dirLabel(d) })),
+      });
+      // stage 3 is gated on stage 2; in a guided flow just produce it
+      if (!existsSync(`runs/AGGREGATE.md`)) await report(undefined, false);
+      await fix([dir], common, false);
+      break;
+    }
+    case "personas": {
+      const sub = await select({
+        message: "Personas:",
+        choices: [
+          { value: "list", label: "list", hint: "show built-in + custom" },
+          { value: "generate", label: "generate", hint: "AI-build a persona graph" },
+        ],
+      });
+      if (sub === "list") personasCommand([]);
+      else await personasGenerate([]);
+      break;
+    }
+    case "doctor": {
+      const choice = await resolveBrainChoice({}, "Which AI should I health-check?");
+      await runDoctor(choice.brain, true);
+      break;
+    }
+  }
+}
+
 async function main() {
   loadDotEnv();
   const [command, ...rest] = process.argv.slice(2);
 
-  if (!command || command === "-h" || command === "--help") {
+  if (!command) {
+    await wizard();
+    return;
+  }
+  if (command === "-h" || command === "--help") {
     printUsage();
-    process.exit(command ? 0 : 1);
+    process.exit(0);
   }
 
   const positionals: string[] = [];
-  const VALUE_FLAGS = new Set(["--persona", "--personas", "--brain", "--runs", "--model"]);
+  const VALUE_FLAGS = new Set(["--persona", "--personas", "--brain", "--runs", "--model", "--effort"]);
   for (let i = 0; i < rest.length; i++) {
     if (rest[i].startsWith("--")) {
       if (VALUE_FLAGS.has(rest[i])) i++; // skip this flag's value
@@ -621,12 +758,7 @@ async function main() {
       );
       break;
     case "fix":
-      await fix(
-        positionals,
-        rest.includes("--brain") ? rest[rest.indexOf("--brain") + 1] : undefined,
-        rest.includes("--force"),
-        rest.includes("--model") ? rest[rest.indexOf("--model") + 1] : undefined,
-      );
+      await fix(positionals, common, rest.includes("--force"));
       break;
     case "all": {
       const url = positionals[0];
@@ -640,9 +772,14 @@ async function main() {
     case "mailtest":
       await mailtest();
       break;
-    case "doctor":
-      await runDoctor(common.brain, rest.includes("--force"));
+    case "doctor": {
+      const choice = await resolveBrainChoice(
+        { brain: common.brain, model: common.model, effort: common.effort },
+        "Which AI should I health-check?",
+      );
+      await runDoctor(choice.brain, rest.includes("--force"));
       break;
+    }
     case "personas": {
       if (rest[0] === "generate") {
         await personasGenerate(rest.slice(1));
@@ -659,6 +796,10 @@ async function main() {
 }
 
 main().catch((e) => {
+  if (e instanceof PromptCancelled) {
+    console.log("\n  cancelled.\n");
+    process.exit(130);
+  }
   console.error(e);
   process.exit(1);
 });
