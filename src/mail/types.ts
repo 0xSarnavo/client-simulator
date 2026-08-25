@@ -7,7 +7,10 @@ export interface MailMessage {
   from: string;
   subject: string;
   date?: Date;
+  /** Decoded readable body — never raw MIME source */
   text: string;
+  /** Decoded HTML body when the message has one, for rendering a screenshot */
+  html?: string;
 }
 
 export interface MailProvider {
@@ -41,21 +44,31 @@ export function htmlToText(html: string): string {
  *  Handles styled "4 6 4 3 4 0" digit boxes and prefers codes near the word "code". */
 export function extractCodes(...parts: string[]): string[] {
   const subject = parts[0] ?? "";
-  const body = htmlToText(parts.slice(1).join("\n"));
+  // Undo quoted-printable soft line breaks first. Bodies normally arrive
+  // already decoded, but on the raw-source fallback a wrapped "4839=\r\n20"
+  // would otherwise yield the wrong code "4839" — worse than finding none.
+  const unfolded = parts.slice(1).join("\n").replace(/=\r?\n/g, "");
+  const body = htmlToText(unfolded);
   const haystack = `${subject}\n${body}`;
 
   const raw = [...new Set(
     (haystack.match(CODE_RE) ?? []).map((c) => c.replace(/\s+/g, "")),
   )];
 
-  // rank: codes near the word "code/verify/otp" first, then by appearance
+  // Rank by where the cue word sits. "Order 998877 shipped. Your code is 483920"
+  // used to tie, because a single window around each number saw "code" either
+  // way; a cue *before* the number is the far stronger signal.
+  const CUE = /code|verify|otp|pin|passcode/i;
   const scored = raw.map((code) => {
     const idx = haystack.search(new RegExp(code.split("").join("\\s?")));
-    const context = haystack.slice(Math.max(0, idx - 80), idx + code.length + 40);
-    const nearCodeWord = /code|verify|otp/i.test(context) ? 0 : 1;
-    return { code, nearCodeWord, idx };
+    const rank = CUE.test(haystack.slice(Math.max(0, idx - 60), idx))
+      ? 0
+      : CUE.test(haystack.slice(idx + code.length, idx + code.length + 30))
+        ? 1
+        : 2;
+    return { code, rank, idx };
   });
-  scored.sort((a, b) => a.nearCodeWord - b.nearCodeWord || a.idx - b.idx);
+  scored.sort((a, b) => a.rank - b.rank || a.idx - b.idx);
   return scored.map((s) => s.code).slice(0, 5);
 }
 
