@@ -177,6 +177,24 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
       continue; // no page change; next think sees the inbox result
     }
 
+    // TRUST BOUNDARY: the brain must never invent an email address.
+    // Any email it types is forced to the assigned ephemeral mailbox.
+    if (
+      decision.action.type === "type" &&
+      opts.mail &&
+      /@/.test(decision.action.text) &&
+      decision.action.text.trim() !== opts.mail.box.address
+    ) {
+      event.note = `brain tried to use invented email "${trim(decision.action.text, 60)}" — overridden with the assigned mailbox`;
+      console.log(
+        `  ⚠ email override: invented address replaced with ${opts.mail.box.address}`,
+      );
+      decision = {
+        ...decision,
+        action: { ...decision.action, text: opts.mail.box.address },
+      };
+    }
+
     try {
       await driver.act(decision);
       consecutiveFailures = 0;
