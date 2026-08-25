@@ -1,4 +1,4 @@
-# client-sim — Plan
+# client-simulator — Plan
 
 Synthetic client agents that walk any website's onboarding like real humans: think out loud, get confused, walk out — and report where and why they dropped off.
 
@@ -52,7 +52,7 @@ Removed from plan. Will be re-scoped based on real usage after refinement:
 possible topics were run matrix, returning-visitor memory, funnel clustering —
 none are needed until the tool sees regular use.
 
-### Expert panel (`client-sim fix <dir>`)
+### Expert panel (`client-simulator fix <dir>`)
 Decoupled from visits: sessions record; experts advise. Each expert is one file implementing:
 ```ts
 interface Expert { id: string; title: string; run(ctx: ExpertContext, brain: Brain): Promise<string|null> }

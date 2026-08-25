@@ -4,7 +4,7 @@ runs/
 package-lock.json
 .DS_Store
 .env
-.clientsim-state.json
+.clientsimulator-state.json
 Agent-Skills/
 Content/
 logos-basecamp/
