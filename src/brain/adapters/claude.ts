@@ -7,9 +7,10 @@ interface ClaudeJsonOutput {
 export const claudeBrain = makeCliBrain({
   name: "claude",
   command: "claude",
-  args: (prompt, sessionId) => [
+  args: (prompt, sessionId, model) => [
     "-p",
     prompt,
+    ...(model ? ["--model", model] : []),
     "--output-format",
     "json",
     ...(sessionId ? ["--resume", sessionId] : []),

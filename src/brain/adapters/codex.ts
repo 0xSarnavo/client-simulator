@@ -7,7 +7,12 @@ import { makeCliBrain } from "./cli-brain.js";
 export const codexBrain = makeCliBrain({
   name: "codex",
   command: "codex",
-  args: (prompt) => ["exec", "--skip-git-repo-check", prompt],
+  args: (prompt, _sessionId, model) => [
+    "exec",
+    "--skip-git-repo-check",
+    ...(model ? ["-m", model] : []),
+    prompt,
+  ],
   extractText: (stdout) => stdout,
   timeoutMs: 300_000,
 });

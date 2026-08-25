@@ -134,6 +134,7 @@ OPTIONS:
   --persona <list>            explicit persona queue, e.g. cold,warm,hot (max 10)
   --runs <n>                  number of prospects, personas chosen at random (max 10)
   --brain <claude|opencode|codex>   which AI CLI plays the client (default: claude)
+  --model <name>              pin the model (e.g. opus, sonnet, gpt-5.2); default = your CLI's own default
   --headless                  run browser without a visible window
   --mobile                    run at phone viewport (390×844, touch) instead of desktop
   --force                     re-run checks / regenerate outputs even if up to date
@@ -151,6 +152,7 @@ interface CommonArgs {
   personas?: string[];
   runs?: number;
   brain: string;
+  model?: string;
   headless: boolean;
   mobile?: boolean;
 }
@@ -163,6 +165,7 @@ function parseCommon(argv: string[]): CommonArgs {
       args.personas = argv[++i].split(",").map((s) => s.trim());
     else if (a === "--runs") args.runs = parseInt(argv[++i], 10);
     else if (a === "--brain") args.brain = argv[++i];
+    else if (a === "--model") args.model = argv[++i];
     else if (a === "--headless") args.headless = true;
     else if (a === "--mobile") args.mobile = true;
   }
@@ -179,9 +182,9 @@ async function resolveRunPlan(common: CommonArgs): Promise<string[]> {
   return promptRunPlan();
 }
 
-async function resolveBrain(name?: string, fallback = "claude") {
+async function resolveBrain(name?: string, fallback = "claude", model?: string) {
   try {
-    return getBrain(name ?? fallback);
+    return getBrain(name ?? fallback, model);
   } catch (e) {
     console.error((e as Error).message);
     process.exit(1);
@@ -207,7 +210,7 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
     }
   }
 
-  const brain = await resolveBrain(common.brain);
+  const brain = await resolveBrain(common.brain, "claude", common.model);
   const dirs: string[] = [];
   const mail = setupMail();
 
@@ -339,7 +342,7 @@ function latestSessionDirs(): string[] {
 }
 
 /** STAGE 3 — expert panel over sessions. Requires stage 2 (aggregate) unless forced. */
-async function fix(dirs: string[], brainName?: string, force = false) {
+async function fix(dirs: string[], brainName?: string, force = false, model?: string) {
   if (dirs.length === 0) {
     console.error(
       "Usage: client-simulator fix <dir> [moreDirs...] [--brain ...] [--force]",
@@ -354,7 +357,7 @@ async function fix(dirs: string[], brainName?: string, force = false) {
     process.exit(1);
   }
 
-  const brain = await resolveBrain(brainName);
+  const brain = await resolveBrain(brainName, "claude", model);
   const sessions = loadSessions(dirs);
 
   if (sessions.length === 0) {
@@ -590,7 +593,7 @@ async function main() {
   }
 
   const positionals: string[] = [];
-  const VALUE_FLAGS = new Set(["--persona", "--personas", "--brain", "--runs"]);
+  const VALUE_FLAGS = new Set(["--persona", "--personas", "--brain", "--runs", "--model"]);
   for (let i = 0; i < rest.length; i++) {
     if (rest[i].startsWith("--")) {
       if (VALUE_FLAGS.has(rest[i])) i++; // skip this flag's value
@@ -622,6 +625,7 @@ async function main() {
         positionals,
         rest.includes("--brain") ? rest[rest.indexOf("--brain") + 1] : undefined,
         rest.includes("--force"),
+        rest.includes("--model") ? rest[rest.indexOf("--model") + 1] : undefined,
       );
       break;
     case "all": {
