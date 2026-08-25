@@ -32,7 +32,7 @@ Maximum 6 recommendations, ordered by impact.`;
       const parsed = parseJsonObject(text);
       const recs = parsed?.recommendations;
       if (!Array.isArray(recs) || recs.length === 0) return null;
-      return render(recs);
+      return renderRecommendations(recs);
     } catch (e) {
       console.error(
         `  [${this.id}] expert failed: ${(e as Error).message.slice(0, 160)}`,
@@ -50,17 +50,20 @@ interface Recommendation {
   copy_rewrite: string;
 }
 
-function render(recs: Recommendation[]): string {
+export function renderRecommendations(recs: Partial<Recommendation>[]): string {
   const lines: string[] = [];
   const order: Record<string, number> = { high: 0, medium: 1, low: 2 };
-  const sorted = [...recs].sort(
-    (a, b) => (order[a.priority] ?? 3) - (order[b.priority] ?? 3),
+  // drop only the entries that say nothing — a single malformed item used to
+  // throw on .toUpperCase() and take the whole section down with it
+  const usable = recs.filter((r) => r && (r.problem || r.fix));
+  const sorted = [...usable].sort(
+    (a, b) => (order[String(a.priority)] ?? 3) - (order[String(b.priority)] ?? 3),
   );
   for (const r of sorted) {
-    lines.push(`### [${r.priority.toUpperCase()}] ${r.problem}`);
+    lines.push(`### [${String(r.priority ?? "medium").toUpperCase()}] ${r.problem ?? "(unspecified)"}`);
     lines.push("");
     if (r.evidence) lines.push(`- **Evidence:** ${r.evidence}`);
-    lines.push(`- **Fix:** ${r.fix}`);
+    if (r.fix) lines.push(`- **Fix:** ${r.fix}`);
     if (r.copy_rewrite) lines.push(`- **Copy rewrite:** "${r.copy_rewrite}"`);
     lines.push("");
   }
