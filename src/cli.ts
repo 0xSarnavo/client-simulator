@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { resolve } from "node:path";
 import { BrowserDriver } from "./browser/driver.js";
 import { getBrain } from "./brain/index.js";
+import { MAX_DECIDE_ATTEMPTS } from "./brain/adapters/cli-brain.js";
 import { PERSONAS } from "./persona/presets.js";
 import { getPersonaRegistry, newPersonaFile } from "./persona/load.js";
 import { generatePersonas } from "./persona/generate.js";
@@ -369,8 +370,17 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
   const dirs: string[] = [];
   const mail = setupMail();
 
+  // A step is usually one call, but decide() retries a malformed reply and each
+  // attempt is its own CLI call. Completion checks (max 2 per session) do not
+  // retry. Experts are stage 3 and counted there.
+  const steps = personaIds.reduce((n, pid) => n + registry.personas[pid].patience_steps, 0);
+  const checks = personaIds.length * 2;
   console.log(
-    `\n  ${personaIds.length} prospect(s) queued: ${personaIds.join(", ")} | ${describeRun(common)}\n`,
+    `\n  ${personaIds.length} prospect(s) queued: ${personaIds.join(", ")} | ${describeRun(common)}`,
+  );
+  console.log(
+    `  stage 1 budget: ~${steps + checks} AI calls, up to ${steps * MAX_DECIDE_ATTEMPTS + checks} if replies need retrying` +
+      ` (personas stop earlier when they finish or leave)\n`,
   );
 
   for (const pid of personaIds) {
@@ -579,7 +589,7 @@ async function fix(dirs: string[], common: CommonArgs, force = false) {
     console.log(
       `\n  Expert panel: ${persona.name} @ ${s.meta.url} (${s.events.length} steps)`,
     );
-    console.log(`  Experts: ${EXPERTS.map((e) => e.id).join(", ")}`);
+    console.log(`  Experts: ${EXPERTS.map((e) => e.id).join(", ")} (${EXPERTS.length} AI calls)`);
 
     const sections: string[] = [];
     for (const expert of EXPERTS) {
