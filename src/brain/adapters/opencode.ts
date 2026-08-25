@@ -8,6 +8,7 @@ export const opencodeBrain = makeCliBrain({
     "--print-logs",
     ...(sessionId ? ["-s", sessionId] : []),
     ...(model ? ["--model", model] : []),
+    // opencode has no effort flag; reasoning depth follows the model config
     prompt,
   ],
   parseSessionId: (output) => output.match(/\bcreated id=(ses_\w+)/)?.[1],

@@ -3,7 +3,7 @@ import { claudeBrain } from "./adapters/claude.js";
 import { opencodeBrain } from "./adapters/opencode.js";
 import { codexBrain } from "./adapters/codex.js";
 
-export function getBrain(name: string, model?: string): Brain {
+export function getBrain(name: string, model?: string, effort?: string): Brain {
   const brains: Record<string, Brain> = {
     claude: claudeBrain,
     opencode: opencodeBrain,
@@ -14,5 +14,6 @@ export function getBrain(name: string, model?: string): Brain {
     throw new Error(`Unknown brain "${name}". Available: ${Object.keys(brains).join(", ")}`);
   }
   if (model) (brain as { model?: string }).model = model;
+  if (effort) (brain as { effort?: string }).effort = effort;
   return brain;
 }

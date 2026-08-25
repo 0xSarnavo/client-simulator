@@ -7,7 +7,7 @@ export interface CliBrainOptions {
   name: string;
   command: string;
   /** Build CLI args. Receives the prompt, persistent session id, and optional model override. */
-  args: (prompt: string, sessionId?: string, model?: string) => string[];
+  args: (prompt: string, sessionId?: string, model?: string, effort?: string) => string[];
   /** Extract the assistant text from the CLI's raw stdout */
   extractText: (stdout: string) => string;
   /** Parse a persistent session id from the first call's output (stdout+stderr) */
@@ -17,6 +17,8 @@ export interface CliBrainOptions {
   timeoutMs?: number;
   /** Model override passed to the CLI (e.g. "opus", "gpt-5.2") */
   model?: string;
+  /** Reasoning effort override (low|medium|high) where the CLI supports it */
+  effort?: string;
 }
 
 export function makeCliBrain(opts: CliBrainOptions): Brain & {
@@ -27,6 +29,7 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
   const self = {
     name: opts.name,
     model: opts.model,
+    effort: opts.effort,
     /** Free-form question inside the same persistent session. Used for verification. */
     async ask(prompt: string): Promise<string> {
       return runOnce(prompt);
@@ -66,7 +69,7 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
 
   async function runOnce(prompt: string): Promise<string> {
     const result = await import("execa").then(({ execa }) =>
-      execa(opts.command, opts.args(prompt, sessionId, self.model), {
+      execa(opts.command, opts.args(prompt, sessionId, self.model, self.effort), {
         stdin: "ignore",
         timeout: opts.timeoutMs ?? TIMEOUT_MS,
         reject: false,
