@@ -9,15 +9,25 @@ import { generatePersonas } from "./persona/generate.js";
 import { runSession } from "./session.js";
 import { generateReport } from "./log/report.js";
 import { generateAggregate, loadSessions } from "./log/aggregate.js";
+import { dirLabel, findSessionDirs, sessionPath, siteSlug } from "./runs.js";
 import { EXPERTS } from "./experts/index.js";
-import type { ExitReason, Persona, StepEvent } from "./types.js";
+import type { Brain, ExitReason, Persona, StepEvent } from "./types.js";
 import type { MailProvider, Mailbox, MailMessage } from "./mail/types.js";
 import { ImapProvider } from "./mail/imap.js";
 import { extractCodes, extractLinks } from "./mail/types.js";
 import { runDoctor, doctorStateExists } from "./doctor.js";
 import { createInterface } from "node:readline/promises";
 import { resolveBrainChoice } from "./brain/picker.js";
-import { PromptCancelled, heading, isInteractive, select, text } from "./ui/prompt.js";
+import {
+  PromptCancelled,
+  confirmed,
+  heading,
+  isInteractive,
+  multiselect,
+  select,
+  text,
+} from "./ui/prompt.js";
+import { readSite } from "./site/read.js";
 
 const MAX_RUNS = 10;
 
@@ -34,7 +44,10 @@ async function promptRunPlan(): Promise<string[]> {
     const remaining = deadline - Date.now();
     if (remaining <= 0) return "";
     return Promise.race([
-      rl.question(q),
+      rl.question(q).catch((e) => {
+        if ((e as { code?: string }).code === "ABORT_ERR") throw new PromptCancelled();
+        throw e;
+      }),
       new Promise<string>((resolve) => setTimeout(() => resolve(""), remaining)),
     ]);
   };
@@ -144,6 +157,7 @@ OPTIONS:
                               codex: low|medium|high, opencode: no effort knob)
   --headless                  run browser without a visible window
   --mobile                    run at phone viewport (390×844, touch) instead of desktop
+  --plan                      re-run the site read + persona plan on a known site
   --force                     re-run checks / regenerate outputs even if up to date
   -h, --help                  show this help
 
@@ -152,8 +166,11 @@ the model and effort lists are read live from the CLI you pick, so they stay
 current. Pass the flags to skip the prompts entirely (and in CI, where there is
 no TTY, the defaults apply silently).
 
-With no --persona and no --runs, visit asks interactively how many cold/warm/hot
-prospects to send, then shuffles the order randomly.
+The first time you test a site, visit reads the landing page (product, audience,
+main CTA) and offers a choice: the built-in personas, or a set generated to fit
+that page which you then pick from. Later visits skip straight to persona counts;
+--plan re-runs it. With no --persona and no --runs, visit asks interactively how
+many cold/warm/hot prospects to send, then shuffles the order randomly.
 
 STAGE COMBINATIONS:
   visit only / report only / fix only (on past sessions) / all — any subset works,
@@ -169,6 +186,8 @@ interface CommonArgs {
   effort?: string;
   headless: boolean;
   mobile?: boolean;
+  /** force the first-visit site read + persona plan on an already-tested site */
+  plan?: boolean;
   /** set once the picker has run, so chained stages never ask twice */
   brainResolved?: boolean;
 }
@@ -185,17 +204,111 @@ function parseCommon(argv: string[]): CommonArgs {
     else if (a === "--effort") args.effort = argv[++i];
     else if (a === "--headless") args.headless = true;
     else if (a === "--mobile") args.mobile = true;
+    else if (a === "--plan") args.plan = true;
   }
   return args;
 }
 
+/** A site is "new" until it has its own folder under runs/. */
+function isNewSite(url: string): boolean {
+  return !existsSync(`runs/${siteSlug(url)}`);
+}
+
+/**
+ * First-visit planning: show what the site actually is, then let the user decide
+ * between the generic built-ins and a persona set generated for this site.
+ * Returns the run queue, or null to fall through to the normal planner.
+ */
+async function planFirstVisit(
+  url: string,
+  brain: Brain & { ask?(prompt: string): Promise<string> },
+): Promise<string[] | null> {
+  heading(`New site — ${siteSlug(url)}`);
+
+  process.stdout.write("  \x1b[2mreading the page...\x1b[0m");
+  const read = await readSite(url, brain);
+  process.stdout.clearLine(0);
+  process.stdout.cursorTo(0);
+
+  if (read) {
+    console.log(`  ${"Product".padEnd(9)} ${read.product}`);
+    console.log(`  ${"For".padEnd(9)} ${read.audience}`);
+    console.log(`  ${"Main CTA".padEnd(9)} ${read.cta}`);
+  } else {
+    console.log("  (could not read the page — continuing anyway)");
+  }
+
+  const how = await select({
+    message: "How do you want to test it?",
+    choices: [
+      { value: "builtin", label: "built-in personas", hint: "cold / warm / hot — start now" },
+      { value: "generate", label: "generate for this site", hint: "personas fitted to this page" },
+      { value: "both", label: "both", hint: "generate a set, then also pick built-in counts" },
+    ],
+  });
+  if (how === "builtin") return null;
+
+  const countAnswer = await text({
+    message: "How many personas to generate? (2-10, Enter for 6):",
+    fallback: "6",
+    validate: (v) => (/^\d+$/.test(v) && +v >= 2 && +v <= 10 ? undefined : "give a number from 2 to 10"),
+  });
+
+  let generated: { id: string; name: string; temperature: string }[] = [];
+  try {
+    const { generatePersonas } = await import("./persona/generate.js");
+    const result = await generatePersonas({
+      description: read ? `${read.audience} (product: ${read.product})` : undefined,
+      count: Number(countAnswer),
+      brain,
+      site: url,
+    });
+    console.log(result.graph);
+    generated = result.written;
+  } catch (e) {
+    console.error(`\n  persona generation failed: ${(e as Error).message.slice(0, 160)}`);
+    console.log("  falling back to the built-in personas.\n");
+    return null;
+  }
+
+  if (generated.length === 0) {
+    console.log("  no personas were written — using the built-ins instead.\n");
+    return null;
+  }
+
+  const queue = await multiselect({
+    message: "Which of them should visit the site? (one run each)",
+    choices: generated.map((p) => ({
+      value: p.id,
+      label: p.id,
+      hint: `${p.name} — ${p.temperature}`,
+    })),
+  });
+
+  if (how === "both") {
+    console.log("");
+    return [...queue, ...(await promptRunPlan())];
+  }
+  return queue;
+}
+
 /** Resolve the run queue: explicit personas > --runs N > interactive planner */
-async function resolveRunPlan(common: CommonArgs): Promise<string[]> {
+async function resolveRunPlan(
+  common: CommonArgs,
+  url: string,
+  brain: Brain & { ask?(prompt: string): Promise<string> },
+): Promise<string[]> {
   if (common.personas?.length) {
     if (common.personas.length > MAX_RUNS) common.personas = common.personas.slice(0, MAX_RUNS);
     return common.personas;
   }
   if (common.runs && common.runs > 0) return randomRunPlan(common.runs);
+
+  // a site you have never tested gets a one-time read + persona plan
+  if (isInteractive() && (common.plan || isNewSite(url))) {
+    const planned = await planFirstVisit(url, brain);
+    if (planned?.length) return planned.slice(0, MAX_RUNS);
+  }
   return promptRunPlan();
 }
 
@@ -216,7 +329,7 @@ async function resolveBrain(common: CommonArgs, purpose?: string) {
       common.effort = choice.effort;
       common.brainResolved = true;
     }
-    return getBrain(common.brain ?? "claude", common.model, common.effort);
+    return getBrain(common.brain ?? "claude", { model: common.model, effort: common.effort });
   } catch (e) {
     if (e instanceof PromptCancelled) throw e;
     console.error((e as Error).message);
@@ -234,7 +347,7 @@ function describeRun(common: CommonArgs): string {
 
 /** STAGE 1 — spawn persona visits. Returns created session dirs. */
 async function visit(url: string, common: CommonArgs): Promise<string[]> {
-  const brain = await resolveBrain(common, "Which AI plays the client?");
+  const planningBrain = await resolveBrain(common, "Which AI plays the client?");
 
   // first-run initialization check (skipped silently once verified)
   if (!doctorStateExists()) {
@@ -242,7 +355,7 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
     if (!ok) process.exit(1);
   }
 
-  const personaIds = await resolveRunPlan(common);
+  const personaIds = await resolveRunPlan(common, url, planningBrain);
   const registry = getPersonaRegistry();
   for (const pid of personaIds) {
     if (!registry.personas[pid]) {
@@ -262,9 +375,7 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
 
   for (const pid of personaIds) {
     const persona: Persona = registry.personas[pid];
-    const sessionDir = resolve(
-      `runs/${new Date().toISOString().replace(/[:.]/g, "-")}-${pid}`,
-    );
+    const sessionDir = sessionPath(url, pid);
     mkdirSync(`${sessionDir}/shots`, { recursive: true });
 
     // EPHEMERAL MAILBOX: created per persona run, destroyed after
@@ -273,17 +384,38 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
       box = await mail.provider.create(pid);
     }
 
+    // fresh brain per persona — a shared one would carry the previous
+    // persona's whole conversation into this one's first impression
+    const brain = getBrain(common.brain ?? "claude", {
+      model: common.model,
+      effort: common.effort,
+      allowDir: sessionDir, // so the persona can read its own screenshots
+    });
+
     const driver = new BrowserDriver();
     try {
-      await driver.launch({ headless: common.headless, shotsDir: `${sessionDir}/shots`, mobile: common.mobile });
-      const { events, exit } = await runSession({
-        url,
-        persona,
-        brain,
-        driver,
-        sessionDir,
-        mail: mail && box ? { provider: mail.provider, box } : undefined,
+      await driver.launch({
+        headless: common.headless,
+        shotsDir: `${sessionDir}/shots`,
+        mobile: common.mobile,
+        videoDir: `${sessionDir}/.video`,
       });
+      let events: StepEvent[] = [];
+      let exit: ExitReason;
+      try {
+        ({ events, exit } = await runSession({
+          url,
+          persona,
+          brain,
+          driver,
+          sessionDir,
+          mail: mail && box ? { provider: mail.provider, box } : undefined,
+        }));
+      } catch (e) {
+        const detail = (e as Error).message.split("\n")[0];
+        console.log(`\n  session failed: ${detail}`);
+        exit = { kind: "guardrail", detail: `Session could not run: ${detail}` };
+      }
 
       writeFileSync(
         `${sessionDir}/report.md`,
@@ -305,11 +437,12 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
           2,
         ),
       );
-      await driver.saveVideo(`${sessionDir}/video.webm`);
       dirs.push(sessionDir);
 
       printSessionSummary(exit, events, sessionDir, dirs.length, personaIds.length);
     } finally {
+      // before close(), and in finally, so an error mid-session still yields a video
+      await driver.saveVideo(`${sessionDir}/video.webm`).catch(() => {});
       await driver.close();
       if (mail && box) {
         process.stdout.write("  🗑 destroying mailbox...");
@@ -346,9 +479,12 @@ function printSessionSummary(
   console.log(`  Session: ${sessionDir}`);
 }
 
-/** STAGE 2 — aggregate report across sessions. Requires stage 1 output. */
+/**
+ * STAGE 2 — aggregate per site. A funnel that mixed several websites together
+ * would be meaningless, so each site gets its own runs/<site>/AGGREGATE.md.
+ */
 async function report(dirs: string[] | undefined, force = false) {
-  const targets = dirs?.length ? dirs : latestSessionDirs();
+  const targets = dirs?.length ? dirs : findSessionDirs();
   if (targets.length === 0) {
     console.error(
       "Nothing to report on. Stage 2 needs stage 1 output — run `client-simulator visit <url>` first.",
@@ -356,43 +492,52 @@ async function report(dirs: string[] | undefined, force = false) {
     process.exit(1);
   }
 
-  // up-to-date check: same session set as last aggregate?
-  const manifestPath = `runs/.aggregate-manifest.json`;
-  if (!force && existsSync(manifestPath) && existsSync(`runs/AGGREGATE.md`)) {
-    try {
-      const prev = JSON.parse(readFileSync(manifestPath, "utf8")) as {
-        dirs: string[];
-      };
-      const same =
-        prev.dirs.length === targets.length &&
-        prev.dirs.every((d, i) => resolve(d) === resolve(targets[i]));
-      if (same) {
-        console.log(
-          `\n  Aggregate report is already up to date (${targets.length} sessions). Use --force to regenerate.\n`,
-        );
-        return;
-      }
-      console.log(
-        `\n  New sessions detected (${prev.dirs.length} → ${targets.length}) — regenerating aggregate...\n`,
-      );
-    } catch {
-      // corrupt manifest → regenerate
-    }
+  // group by the site each session actually visited, not by where it sits on disk
+  const bySite = new Map<string, string[]>();
+  for (const s of loadSessions(targets)) {
+    const site = siteSlug(s.meta.url);
+    bySite.set(site, [...(bySite.get(site) ?? []), s.dir]);
   }
 
-  writeFileSync(`runs/AGGREGATE.md`, generateAggregate(targets));
-  writeFileSync(manifestPath, JSON.stringify({ dirs: targets }, null, 2));
-  console.log(
-    `\n  Aggregate report (${targets.length} sessions) → ${resolve("runs/AGGREGATE.md")}\n`,
-  );
+  if (bySite.size === 0) {
+    console.error("No readable sessions (missing meta.json or session.jsonl).");
+    process.exit(1);
+  }
+
+  let written = 0;
+  for (const [site, siteDirs] of bySite) {
+    const out = `runs/${site}/AGGREGATE.md`;
+    const manifestPath = `runs/${site}/.aggregate-manifest.json`;
+
+    if (!force && existsSync(manifestPath) && existsSync(out)) {
+      try {
+        const prev = JSON.parse(readFileSync(manifestPath, "utf8")) as { dirs: string[] };
+        const same =
+          prev.dirs.length === siteDirs.length &&
+          prev.dirs.every((d, i) => resolve(d) === resolve(siteDirs[i]));
+        if (same) {
+          console.log(`  ${site}: up to date (${siteDirs.length} sessions) — --force to regenerate`);
+          continue;
+        }
+        console.log(`  ${site}: ${prev.dirs.length} → ${siteDirs.length} sessions, regenerating...`);
+      } catch {
+        // corrupt manifest → regenerate
+      }
+    }
+
+    mkdirSync(`runs/${site}`, { recursive: true });
+    writeFileSync(out, generateAggregate(siteDirs));
+    writeFileSync(manifestPath, JSON.stringify({ dirs: siteDirs }, null, 2));
+    console.log(`  ${site}: ${siteDirs.length} session(s) → ${resolve(out)}`);
+    written++;
+  }
+
+  if (written > 0) console.log("");
 }
 
-function latestSessionDirs(): string[] {
-  if (!existsSync("runs")) return [];
-  return readdirSync("runs")
-    .filter((d) => existsSync(`runs/${d}/meta.json`))
-    .sort()
-    .map((d) => resolve(`runs/${d}`));
+/** The aggregate that covers a given session. */
+function aggregatePathFor(url: string): string {
+  return `runs/${siteSlug(url)}/AGGREGATE.md`;
 }
 
 /** STAGE 3 — expert panel over sessions. Requires stage 2 (aggregate) unless forced. */
@@ -404,20 +549,23 @@ async function fix(dirs: string[], common: CommonArgs, force = false) {
     process.exit(1);
   }
 
-  if (!existsSync(`runs/AGGREGATE.md`)) {
-    console.error(
-      "Stage 3 needs stage 2 — no runs/AGGREGATE.md found. Run `client-simulator report` first (or add --force to skip the aggregate).",
-    );
-    process.exit(1);
-  }
-
-  const brain = await resolveBrain(common, "Which AI runs the expert panel?");
   const sessions = loadSessions(dirs);
-
   if (sessions.length === 0) {
     console.error("No valid sessions (missing meta.json or session.jsonl).");
     process.exit(1);
   }
+
+  const ungated = sessions.filter((s) => !existsSync(aggregatePathFor(s.meta.url)));
+  if (!force && ungated.length > 0) {
+    const missing = [...new Set(ungated.map((s) => aggregatePathFor(s.meta.url)))];
+    console.error(
+      `Stage 3 needs stage 2 — missing ${missing.join(", ")}. Run \`client-simulator report\` first (or add --force to skip the aggregate).`,
+    );
+    process.exit(1);
+  }
+
+  // resolves the brain/model/effort choice; each expert then gets its own instance
+  await resolveBrain(common, "Which AI runs the expert panel?");
 
   for (const s of sessions) {
     if (!force && existsSync(`${s.dir}/FIXES.md`)) {
@@ -436,9 +584,16 @@ async function fix(dirs: string[], common: CommonArgs, force = false) {
     const sections: string[] = [];
     for (const expert of EXPERTS) {
       process.stdout.write(`  [${expert.id}] ${expert.title}...`);
+      // fresh brain per expert — independent verdicts, not a group conversation
+      const expertBrain = getBrain(common.brain ?? "claude", {
+        model: common.model,
+        effort: common.effort,
+        role: "expert",
+        allowDir: s.dir,
+      });
       const section = await expert.run(
         { persona, url: s.meta.url, events: s.events, exit: s.meta.exit, viewport: (s.meta as any).viewport },
-        brain,
+        expertBrain,
       );
       if (process.stdout.isTTY) {
         process.stdout.clearLine(0);
@@ -462,17 +617,18 @@ async function fix(dirs: string[], common: CommonArgs, force = false) {
   }
 }
 
-function dirLabel(dir: string): string {
-  return dir.split("/").filter(Boolean).pop() ?? dir;
-}
-
 /** PIPELINE — visit → report → fix (pipeline always regenerates: it just made new data) */
 async function all(url: string, common: CommonArgs) {
   const dirs = await visit(url, common);
   await report(dirs, true);
   // common now carries the resolved brain/model/effort — stage 3 reuses it verbatim
   await fix(dirs, common, true);
-  console.log(`\n  Pipeline complete: ${dirs.length} session(s), see runs/AGGREGATE.md + FIXES.md per session.\n`);
+  const sites = [...new Set(loadSessions(dirs).map((x) => siteSlug(x.meta.url)))];
+  console.log(
+    `\n  Pipeline complete: ${dirs.length} session(s). See ${sites
+      .map((x) => `runs/${x}/AGGREGATE.md`)
+      .join(", ")} + FIXES.md per session.\n`,
+  );
 }
 
 /** Mailbox lifecycle test: create -> wait for real mail -> extract -> destroy */
@@ -563,7 +719,7 @@ async function personasGenerate(rest: string[]) {
       }
       if (!description) {
         description = (
-          await ask("  Describe your ideal customers (roles, company types, size): ")
+          await ask("  Who is this for? (optional if a site was given — Enter to infer): ")
         ).trim();
       }
     } finally {
@@ -571,9 +727,10 @@ async function personasGenerate(rest: string[]) {
     }
   }
 
-  if (!description) {
+  // a scraped site is enough on its own — the audience is inferred from the page
+  if (!description && !site) {
     console.error(
-      '\n  Need to know who your ideal customers are. Either:\n    client-simulator personas generate --from "CTOs and platform engineers at Series B startups"\n    ...or run interactively and answer the prompt.',
+      '\n  Need either a site to scrape or a description of who this is for:\n    client-simulator personas generate --site https://yoursite.com\n    client-simulator personas generate --from "CTOs at Series B startups"',
     );
     process.exit(1);
   }
@@ -682,17 +839,18 @@ async function wizard() {
       await report(undefined, false);
       break;
     case "fix": {
-      const dirs = latestSessionDirs();
+      const dirs = findSessionDirs();
       if (dirs.length === 0) {
         console.error("\n  No sessions to review yet — run a visit first.\n");
         process.exit(1);
       }
       const dir = await select({
         message: "Which session?",
+        // show site/date/run, not just the leaf, so sessions stay distinguishable
         choices: [...dirs].reverse().map((d) => ({ value: d, label: dirLabel(d) })),
       });
       // stage 3 is gated on stage 2; in a guided flow just produce it
-      if (!existsSync(`runs/AGGREGATE.md`)) await report(undefined, false);
+      await report(undefined, false);
       await fix([dir], common, false);
       break;
     }

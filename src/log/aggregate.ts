@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { ExitReason, StepEvent } from "../types.js";
 import { PERSONAS } from "../persona/presets.js";
+export { siteSlug } from "../runs.js";
 
 export interface SessionMeta {
   url: string;
@@ -152,8 +153,10 @@ function shortUrl(url: string): string {
   }
 }
 
+/** Within a per-site report the site is implicit, so show <date>/<run>. */
 function dirName(dir: string): string {
-  return dir.split("/").filter(Boolean).pop() ?? dir;
+  const parts = dir.split("/").filter(Boolean);
+  return parts.slice(-2).join("/") || dir;
 }
 
 function cell(s: string): string {

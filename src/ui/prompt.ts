@@ -165,6 +165,105 @@ export async function select<T>(opts: {
   }
 }
 
+/**
+ * Arrow-key multi select: space toggles, `a` toggles all, enter confirms.
+ * Returns every value when there is no TTY, and refuses an empty confirmation.
+ */
+export async function multiselect<T>(opts: {
+  message: string;
+  choices: Choice<T>[];
+  /** Rows ticked when the menu opens. Defaults to all. */
+  preselected?: (choice: Choice<T>, index: number) => boolean;
+}): Promise<T[]> {
+  const { choices, message } = opts;
+  const selectable = choices.filter((c) => !c.disabled);
+  if (selectable.length === 0) throw new Error(`Nothing selectable for "${message}".`);
+  if (!isInteractive()) return selectable.map((c) => c.value);
+
+  const picked = new Set<number>();
+  choices.forEach((c, i) => {
+    if (!c.disabled && (opts.preselected?.(c, i) ?? true)) picked.add(i);
+  });
+
+  const hinted = choices.filter((c) => c.hint || c.disabled);
+  const labelWidth = hinted.length ? Math.max(...hinted.map((c) => c.label.length)) : 0;
+  let cursor = choices.findIndex((c) => !c.disabled);
+  let drawn = 0;
+  const out = process.stdout;
+
+  const render = () => {
+    const lines = [
+      "",
+      `  ${message}`,
+      "",
+      ...choices.map((c, i) => {
+        const active = i === cursor;
+        const box = c.disabled ? "   " : picked.has(i) ? `${GREEN}[x]${RESET}` : "[ ]";
+        const pointer = active ? `${CYAN}❯${RESET}` : " ";
+        const { label, hint } = fitRow(c.label, c.disabled ?? c.hint ?? "", labelWidth);
+        const body = c.disabled
+          ? `${DIM}${label}  ${hint}${RESET}`
+          : `${active ? CYAN : ""}${label}${active ? RESET : ""}${hint ? `  ${DIM}${hint}${RESET}` : ""}`;
+        return `  ${pointer} ${box} ${body}`;
+      }),
+      "",
+      `  ${DIM}↑↓ move · space toggle · a all · enter confirm (${picked.size} selected)${RESET}`,
+    ];
+    if (drawn > 0) out.write(`${ESC}${drawn}A${ESC}0J`);
+    out.write(lines.join("\n") + "\n");
+    drawn = lines.length;
+  };
+
+  const move = (step: number) => {
+    let next = cursor;
+    for (let i = 0; i < choices.length; i++) {
+      next = (next + step + choices.length) % choices.length;
+      if (!choices[next].disabled) break;
+    }
+    cursor = next;
+  };
+
+  emitKeypressEvents(process.stdin);
+  const wasRaw = process.stdin.isRaw ?? false;
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  out.write(HIDE);
+
+  try {
+    return await new Promise<T[]>((resolve, reject) => {
+      const finish = (settle: () => void) => {
+        process.stdin.off("keypress", onKey);
+        if (drawn > 0) out.write(`${ESC}${drawn}A${ESC}0J`);
+        settle();
+      };
+
+      const onKey = (str: string, key: { name?: string; ctrl?: boolean }) => {
+        if (key.ctrl && key.name === "c") return finish(() => reject(new PromptCancelled()));
+        if (key.name === "up" || key.name === "k") move(-1);
+        else if (key.name === "down" || key.name === "j") move(1);
+        else if (key.name === "space" || str === " ") {
+          picked.has(cursor) ? picked.delete(cursor) : picked.add(cursor);
+        } else if (key.name === "a") {
+          const all = picked.size === selectable.length;
+          picked.clear();
+          if (!all) choices.forEach((c, i) => !c.disabled && picked.add(i));
+        } else if (key.name === "return" || key.name === "enter") {
+          if (picked.size === 0) return; // nothing chosen — keep the menu open
+          return finish(() => resolve([...picked].sort((a, b) => a - b).map((i) => choices[i].value)));
+        } else return;
+        render();
+      };
+
+      process.stdin.on("keypress", onKey);
+      render();
+    });
+  } finally {
+    out.write(SHOW);
+    process.stdin.setRawMode(wasRaw);
+    process.stdin.pause();
+  }
+}
+
 /** Free-text input. Returns fallback when there is no TTY or the answer is blank. */
 export async function text(opts: {
   message: string;
@@ -175,7 +274,10 @@ export async function text(opts: {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     for (;;) {
-      const answer = (await rl.question(`  ${opts.message} `)).trim();
+      const answer = (await rl.question(`  ${opts.message} `).catch((e) => {
+        if ((e as { code?: string }).code === "ABORT_ERR") throw new PromptCancelled();
+        throw e;
+      })).trim();
       if (!answer) {
         if (opts.fallback !== undefined) return opts.fallback;
         console.log(`  ${DIM}required${RESET}`);

@@ -1,17 +1,19 @@
 import { makeCliBrain } from "./cli-brain.js";
 
-export const opencodeBrain = makeCliBrain({
-  name: "opencode",
-  command: "opencode",
-  args: (prompt, sessionId, model) => [
-    "run",
-    "--print-logs",
-    ...(sessionId ? ["-s", sessionId] : []),
-    ...(model ? ["--model", model] : []),
-    // opencode has no effort flag; reasoning depth follows the model config
-    prompt,
-  ],
-  parseSessionId: (output) => output.match(/\bcreated id=(ses_\w+)/)?.[1],
-  extractText: (stdout) => stdout,
-  timeoutMs: 300_000,
-});
+export function createOpencodeBrain() {
+  return makeCliBrain({
+    name: "opencode",
+    // no -s: stateless per call, same as the other adapters — journey memory
+    // comes from the tiered history the prompt builder renders
+    command: "opencode",
+    args: (prompt, { model }) => [
+      "run",
+      "--print-logs",
+      ...(model ? ["--model", model] : []),
+      // opencode has no effort flag; reasoning depth follows the model config
+      prompt,
+    ],
+    extractText: (stdout) => stdout,
+    timeoutMs: 300_000,
+  });
+}
