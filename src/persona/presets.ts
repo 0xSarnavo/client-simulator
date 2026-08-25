@@ -41,7 +41,7 @@ export const HOT_PERSONA: Persona = {
   temperature: "hot",
   goal: "Sign up and start using the product right now. I already decided I want something like this.",
   tech_comfort: "high",
-  patience_steps: 20,
+  patience_steps: 26,
   otp_patience_seconds: 240,
   max_confusion_before_bail: 10,
   traits: [

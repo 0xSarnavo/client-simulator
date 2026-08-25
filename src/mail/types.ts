@@ -20,12 +20,43 @@ export interface MailProvider {
   destroy(box: Mailbox): Promise<void>;
 }
 
-const CODE_RE = /\b\d{4,8}\b/g;
+const CODE_RE = /\b\d(?:[ \t]?\d){3,7}\b/g;
 
-/** Pull verification codes out of a message (subject + body) */
+/** Strip HTML down to visible text (styles/scripts removed, tags dropped, entities decoded) */
+export function htmlToText(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
+    .replace(/\s+/g, " ");
+}
+
+/** Pull verification codes out of a message (subject + body).
+ *  Handles styled "4 6 4 3 4 0" digit boxes and prefers codes near the word "code". */
 export function extractCodes(...parts: string[]): string[] {
-  const haystack = parts.filter(Boolean).join("\n");
-  return [...new Set(haystack.match(CODE_RE) ?? [])].slice(0, 5);
+  const subject = parts[0] ?? "";
+  const body = htmlToText(parts.slice(1).join("\n"));
+  const haystack = `${subject}\n${body}`;
+
+  const raw = [...new Set(
+    (haystack.match(CODE_RE) ?? []).map((c) => c.replace(/\s+/g, "")),
+  )];
+
+  // rank: codes near the word "code/verify/otp" first, then by appearance
+  const scored = raw.map((code) => {
+    const idx = haystack.search(new RegExp(code.split("").join("\\s?")));
+    const context = haystack.slice(Math.max(0, idx - 80), idx + code.length + 40);
+    const nearCodeWord = /code|verify|otp/i.test(context) ? 0 : 1;
+    return { code, nearCodeWord, idx };
+  });
+  scored.sort((a, b) => a.nearCodeWord - b.nearCodeWord || a.idx - b.idx);
+  return scored.map((s) => s.code).slice(0, 5);
 }
 
 /** Pull links out of a message (magic links, verify buttons) */
