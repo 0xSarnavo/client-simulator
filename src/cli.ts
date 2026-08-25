@@ -1,0 +1,659 @@
+#!/usr/bin/env node
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { BrowserDriver } from "./browser/driver.js";
+import { getBrain } from "./brain/index.js";
+import { PERSONAS } from "./persona/presets.js";
+import { getPersonaRegistry, newPersonaFile } from "./persona/load.js";
+import { generatePersonas } from "./persona/generate.js";
+import { runSession } from "./session.js";
+import { generateReport } from "./log/report.js";
+import { generateAggregate, loadSessions } from "./log/aggregate.js";
+import { EXPERTS } from "./experts/index.js";
+import type { ExitReason, Persona, StepEvent } from "./types.js";
+import type { MailProvider, Mailbox, MailMessage } from "./mail/types.js";
+import { ImapProvider } from "./mail/imap.js";
+import { extractCodes, extractLinks } from "./mail/types.js";
+import { runDoctor, doctorStateExists } from "./doctor.js";
+import { createInterface } from "node:readline/promises";
+
+const MAX_RUNS = 10;
+
+/** Interactive run planner: how many cold/warm/hot, then random order */
+async function promptRunPlan(): Promise<string[]> {
+  if (!process.stdin.isTTY) {
+    console.log("  (non-interactive shell — defaulting to 1 cold run; use --persona or --runs to override)");
+    return ["cold"];
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const deadline = Date.now() + 120_000;
+  const answer = async (q: string): Promise<string> => {
+    // never hang automation: if nobody answers before the deadline, fall back
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return "";
+    return Promise.race([
+      rl.question(q),
+      new Promise<string>((resolve) => setTimeout(() => resolve(""), remaining)),
+    ]);
+  };
+  try {
+    console.log(`\n  Plan your prospects (max ${MAX_RUNS} total per session):`);
+    const ask = async (label: string): Promise<number> => {
+      const a = (await answer(`    ${label} runs (0-${MAX_RUNS}): `)).trim();
+      const n = parseInt(a || "0", 10);
+      return Number.isFinite(n) ? Math.max(0, Math.min(MAX_RUNS, n)) : 0;
+    };
+    let cold = 0,
+      warm = 0,
+      hot = 0;
+    do {
+      cold = await ask("cold");
+      warm = await ask("warm");
+      hot = await ask("hot");
+      if (Date.now() > deadline && cold + warm + hot === 0) {
+        console.log("    (no answer — defaulting to 1 cold run)");
+        return ["cold"];
+      }
+      if (cold + warm + hot === 0) console.log("    at least 1 required");
+      if (cold + warm + hot > MAX_RUNS) console.log(`    total must be ≤ ${MAX_RUNS}`);
+    } while (cold + warm + hot === 0 || cold + warm + hot > MAX_RUNS);
+
+    const queue = [
+      ...Array<0>(cold).fill(0).map(() => "cold"),
+      ...Array<0>(warm).fill(0).map(() => "warm"),
+      ...Array<0>(hot).fill(0).map(() => "hot"),
+    ];
+    // random order so site sees a natural mix
+    for (let i = queue.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [queue[i], queue[j]] = [queue[j], queue[i]];
+    }
+    return queue;
+  } finally {
+    rl.close();
+  }
+}
+
+/** --runs N: N prospects, persona picked at random each time */
+function randomRunPlan(n: number): string[] {
+  const pool = ["cold", "warm", "hot"];
+  return Array.from({ length: Math.min(n, MAX_RUNS) }, () => pool[Math.floor(Math.random() * 3)]);
+}
+
+/** Load KEY=VALUE pairs from .env in the cwd (existing env vars win) */
+function loadDotEnv() {
+  const path = resolve(".env");
+  if (!existsSync(path)) return;
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
+    if (!m) continue;
+    const key = m[1];
+    let value = m[2];
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (!(key in process.env)) process.env[key] = value;
+  }
+}
+
+function setupMail(): { provider: MailProvider } | null {
+  loadDotEnv();
+  const { CLIENTSIM_IMAP_HOST, CLIENTSIM_IMAP_USER, CLIENTSIM_IMAP_PASS, CLIENTSIM_MAIL_DOMAIN } =
+    process.env;
+  if (!CLIENTSIM_IMAP_HOST || !CLIENTSIM_IMAP_USER || !CLIENTSIM_IMAP_PASS || !CLIENTSIM_MAIL_DOMAIN) {
+    return null;
+  }
+  const provider = new ImapProvider({
+    host: CLIENTSIM_IMAP_HOST,
+    user: CLIENTSIM_IMAP_USER,
+    pass: CLIENTSIM_IMAP_PASS,
+    domain: CLIENTSIM_MAIL_DOMAIN,
+    tls: process.env.CLIENTSIM_IMAP_TLS !== "false",
+    port: process.env.CLIENTSIM_IMAP_PORT ? Number(process.env.CLIENTSIM_IMAP_PORT) : undefined,
+  });
+  console.log("  mail: IMAP provider configured (ephemeral mailboxes enabled)");
+  return { provider };
+}
+
+function printUsage() {
+  console.log(`client-sim - synthetic clients that walk your onboarding and report where they leave
+
+USAGE:
+  client-sim visit <url> [options]      stage 1: spawn persona runs (one session per persona)
+  client-sim report [dirs]              stage 2: aggregate funnel report across sessions
+  client-sim fix <dirs...> [options]    stage 3: expert panel reviews sessions -> FIXES.md
+  client-sim all <url> [options]        run 1 -> 2 -> 3 together
+  client-sim doctor [--force]           verify environment (runs automatically on first visit)
+  client-sim personas [--new "Name"]    list personas / scaffold a custom one
+  client-sim personas generate          AI-builds a persona graph from your ideal-customer
+                                        description (+ optional --site scrape):
+                                          --from "who buys this" --site <url> --count 4
+  client-sim mailtest                   test mailbox create/receive/extract/destroy
+
+OPTIONS:
+  --persona <list>            explicit persona queue, e.g. cold,warm,hot (max 10)
+  --runs <n>                  number of prospects, personas chosen at random (max 10)
+  --brain <claude|opencode>   which AI CLI plays the client (default: claude)
+  --headless                  run browser without a visible window
+  --mobile                    run at phone viewport (390×844, touch) instead of desktop
+  --force                     re-run checks / regenerate outputs even if up to date
+  -h, --help                  show this help
+
+With no --persona and no --runs, visit asks interactively how many cold/warm/hot
+prospects to send, then shuffles the order randomly.
+
+STAGE COMBINATIONS:
+  visit only / report only / fix only (on past sessions) / all — any subset works,
+  as long as stages run in order: a stage needs the artifacts of the one before it.`);
+}
+
+interface CommonArgs {
+  personas?: string[];
+  runs?: number;
+  brain: string;
+  headless: boolean;
+  mobile?: boolean;
+}
+
+function parseCommon(argv: string[]): CommonArgs {
+  const args: CommonArgs = { brain: "claude", headless: false, mobile: false };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--personas" || a === "--persona")
+      args.personas = argv[++i].split(",").map((s) => s.trim());
+    else if (a === "--runs") args.runs = parseInt(argv[++i], 10);
+    else if (a === "--brain") args.brain = argv[++i];
+    else if (a === "--headless") args.headless = true;
+    else if (a === "--mobile") args.mobile = true;
+  }
+  return args;
+}
+
+/** Resolve the run queue: explicit personas > --runs N > interactive planner */
+async function resolveRunPlan(common: CommonArgs): Promise<string[]> {
+  if (common.personas?.length) {
+    if (common.personas.length > MAX_RUNS) common.personas = common.personas.slice(0, MAX_RUNS);
+    return common.personas;
+  }
+  if (common.runs && common.runs > 0) return randomRunPlan(common.runs);
+  return promptRunPlan();
+}
+
+async function resolveBrain(name?: string, fallback = "claude") {
+  try {
+    return getBrain(name ?? fallback);
+  } catch (e) {
+    console.error((e as Error).message);
+    process.exit(1);
+  }
+}
+
+/** STAGE 1 — spawn persona visits. Returns created session dirs. */
+async function visit(url: string, common: CommonArgs): Promise<string[]> {
+  // first-run initialization check (skipped silently once verified)
+  if (!doctorStateExists()) {
+    const ok = await runDoctor(common.brain);
+    if (!ok) process.exit(1);
+  }
+
+  const personaIds = await resolveRunPlan(common);
+  const registry = getPersonaRegistry();
+  for (const pid of personaIds) {
+    if (!registry.personas[pid]) {
+      console.error(
+        `Unknown persona "${pid}". Available: ${Object.keys(registry.personas).join(", ")} (or add YAML files in personas/)`,
+      );
+      process.exit(1);
+    }
+  }
+
+  const brain = await resolveBrain(common.brain);
+  const dirs: string[] = [];
+  const mail = setupMail();
+
+  console.log(
+    `\n  ${personaIds.length} prospect(s) queued: ${personaIds.join(", ")} | brain: ${brain.name}\n`,
+  );
+
+  for (const pid of personaIds) {
+    const persona: Persona = registry.personas[pid];
+    const sessionDir = resolve(
+      `runs/${new Date().toISOString().replace(/[:.]/g, "-")}-${pid}`,
+    );
+    mkdirSync(`${sessionDir}/shots`, { recursive: true });
+
+    // EPHEMERAL MAILBOX: created per persona run, destroyed after
+    let box: Mailbox | undefined;
+    if (mail) {
+      box = await mail.provider.create(pid);
+    }
+
+    const driver = new BrowserDriver();
+    try {
+      await driver.launch({ headless: common.headless, shotsDir: `${sessionDir}/shots`, mobile: common.mobile });
+      const { events, exit } = await runSession({
+        url,
+        persona,
+        brain,
+        driver,
+        sessionDir,
+      });
+
+      writeFileSync(
+        `${sessionDir}/report.md`,
+        generateReport({ persona, url, brain: brain.name, events, exit }),
+      );
+      writeFileSync(
+        `${sessionDir}/meta.json`,
+        JSON.stringify({ url, personaId: pid, brain: brain.name, exit, viewport: common.mobile ? "mobile" : "desktop" }, null, 2),
+      );
+      await driver.saveVideo(`${sessionDir}/video.webm`);
+      dirs.push(sessionDir);
+
+      printSessionSummary(exit, events, sessionDir, dirs.length, personaIds.length);
+    } finally {
+      await driver.close();
+      if (mail && box) {
+        process.stdout.write("  🗑 destroying mailbox...");
+        try {
+          await mail.provider.destroy(box);
+          await (mail.provider as ImapProvider).close?.();
+          console.log(" gone");
+        } catch (e) {
+          console.log(` failed: ${(e as Error).message.slice(0, 100)}`);
+        }
+      }
+    }
+  }
+  return dirs;
+}
+
+function printSessionSummary(
+  exit: ExitReason,
+  events: StepEvent[],
+  sessionDir: string,
+  n: number,
+  total: number,
+) {
+  console.log(`\n${"=".repeat(60)}`);
+  console.log(`  [${n}/${total}] ${exit.kind.toUpperCase()}`);
+  if (exit.kind === "abandoned") {
+    const last = events[events.length - 1];
+    console.log(`  Where: step ${last?.n} on ${last?.url}`);
+    console.log(`  Why: "${exit.reason}"`);
+    console.log(`  Wanted answered: "${exit.question}"`);
+  }
+  if (exit.kind === "completed") console.log(`  ${exit.summary}`);
+  if (exit.kind === "guardrail") console.log(`  ${exit.detail}`);
+  console.log(`  Session: ${sessionDir}`);
+}
+
+/** STAGE 2 — aggregate report across sessions. Requires stage 1 output. */
+async function report(dirs: string[] | undefined, force = false) {
+  const targets = dirs?.length ? dirs : latestSessionDirs();
+  if (targets.length === 0) {
+    console.error(
+      "Nothing to report on. Stage 2 needs stage 1 output — run `client-sim visit <url>` first.",
+    );
+    process.exit(1);
+  }
+
+  // up-to-date check: same session set as last aggregate?
+  const manifestPath = `runs/.aggregate-manifest.json`;
+  if (!force && existsSync(manifestPath) && existsSync(`runs/AGGREGATE.md`)) {
+    try {
+      const prev = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+        dirs: string[];
+      };
+      const same =
+        prev.dirs.length === targets.length &&
+        prev.dirs.every((d, i) => resolve(d) === resolve(targets[i]));
+      if (same) {
+        console.log(
+          `\n  Aggregate report is already up to date (${targets.length} sessions). Use --force to regenerate.\n`,
+        );
+        return;
+      }
+      console.log(
+        `\n  New sessions detected (${prev.dirs.length} → ${targets.length}) — regenerating aggregate...\n`,
+      );
+    } catch {
+      // corrupt manifest → regenerate
+    }
+  }
+
+  writeFileSync(`runs/AGGREGATE.md`, generateAggregate(targets));
+  writeFileSync(manifestPath, JSON.stringify({ dirs: targets }, null, 2));
+  console.log(
+    `\n  Aggregate report (${targets.length} sessions) → ${resolve("runs/AGGREGATE.md")}\n`,
+  );
+}
+
+function latestSessionDirs(): string[] {
+  if (!existsSync("runs")) return [];
+  return readdirSync("runs")
+    .filter((d) => existsSync(`runs/${d}/meta.json`))
+    .sort()
+    .map((d) => resolve(`runs/${d}`));
+}
+
+/** STAGE 3 — expert panel over sessions. Requires stage 2 (aggregate) unless forced. */
+async function fix(dirs: string[], brainName?: string, force = false) {
+  if (dirs.length === 0) {
+    console.error(
+      "Usage: client-sim fix <dir> [moreDirs...] [--brain ...] [--force]",
+    );
+    process.exit(1);
+  }
+
+  if (!existsSync(`runs/AGGREGATE.md`)) {
+    console.error(
+      "Stage 3 needs stage 2 — no runs/AGGREGATE.md found. Run `client-sim report` first (or add --force to skip the aggregate).",
+    );
+    process.exit(1);
+  }
+
+  const brain = await resolveBrain(brainName);
+  const sessions = loadSessions(dirs);
+
+  if (sessions.length === 0) {
+    console.error("No valid sessions (missing meta.json or session.jsonl).");
+    process.exit(1);
+  }
+
+  for (const s of sessions) {
+    if (!force && existsSync(`${s.dir}/FIXES.md`)) {
+      console.log(
+        `\n  ${dirLabel(s.dir)}: FIXES.md already exists — skipping (--force to re-run experts).`,
+      );
+      continue;
+    }
+    const registry = getPersonaRegistry();
+    const persona = registry.personas[s.meta.personaId] ?? PERSONAS.cold;
+    console.log(
+      `\n  Expert panel: ${persona.name} @ ${s.meta.url} (${s.events.length} steps)`,
+    );
+    console.log(`  Experts: ${EXPERTS.map((e) => e.id).join(", ")}`);
+
+    const sections: string[] = [];
+    for (const expert of EXPERTS) {
+      process.stdout.write(`  [${expert.id}] ${expert.title}...`);
+      const section = await expert.run(
+        { persona, url: s.meta.url, events: s.events, exit: s.meta.exit, viewport: (s.meta as any).viewport },
+        brain,
+      );
+      if (process.stdout.isTTY) {
+        process.stdout.clearLine(0);
+        process.stdout.cursorTo(0);
+      } else {
+        process.stdout.write("\n");
+      }
+      if (section) {
+        console.log(`  [${expert.id}] done`);
+        sections.push(`## ${expert.title} — ${expert.id}\n\n${section}`);
+      } else {
+        console.log(`  [${expert.id}] skipped`);
+      }
+    }
+
+    if (sections.length === 0) continue;
+
+    const doc = `# Expert Fixes\n\nSession: \`${s.dir}\`\nSite: ${s.meta.url}\nPersona: ${persona.name} (${persona.temperature})\n\n---\n\n${sections.join("\n---\n\n")}\n`;
+    writeFileSync(`${s.dir}/FIXES.md`, doc);
+    console.log(`  Fixes → ${s.dir}/FIXES.md`);
+  }
+}
+
+function dirLabel(dir: string): string {
+  return dir.split("/").filter(Boolean).pop() ?? dir;
+}
+
+/** PIPELINE — visit → report → fix (pipeline always regenerates: it just made new data) */
+async function all(url: string, common: CommonArgs) {
+  const dirs = await visit(url, common);
+  await report(dirs, true);
+  await fix(dirs, common.brain, true);
+  console.log(`\n  Pipeline complete: ${dirs.length} session(s), see runs/AGGREGATE.md + FIXES.md per session.\n`);
+}
+
+/** Mailbox lifecycle test: create -> wait for real mail -> extract -> destroy */
+async function mailtest() {
+  const mail = setupMail();
+  if (!mail) {
+    console.error(
+      "Set CLIENTSIM_IMAP_HOST, CLIENTSIM_IMAP_USER, CLIENTSIM_IMAP_PASS, CLIENTSIM_MAIL_DOMAIN first (see README).",
+    );
+    process.exit(1);
+  }
+
+  const box = await mail.provider.create("mailtest");
+  console.log(`\n  ✅ mailbox created: ${box.address}`);
+  console.log(`\n  → Send any email to that address now (from another account).\n`);
+
+  const deadline = Date.now() + 120_000;
+  let msgs: MailMessage[] = [];
+  try {
+    while (Date.now() < deadline) {
+      msgs = await mail.provider.fetchNew(box);
+      if (msgs.length > 0) break;
+      process.stdout.write("  waiting for mail...\r");
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+  } catch (e) {
+    const msg = (e as Error).message;
+    console.log(`\n\n  ❌ inbox check failed: ${msg.slice(0, 200)}`);
+    if (msg.includes("AUTHENTICATIONFAILED")) {
+      console.log(`
+  Gmail says the credentials are wrong. Checklist:
+    1. IMAP enabled: mail.google.com → gear → See all settings → Forwarding and POP/IMAP → Enable IMAP
+    2. CLIENTSIM_IMAP_PASS must be a 16-char APP PASSWORD (not your login password)
+       → myaccount.google.com/apppasswords (requires 2-Step Verification)
+    3. Paste it without extra characters, e.g. "abcd efgh ijkl mnop"`);
+    }
+    process.exit(1);
+  }
+  console.log("");
+
+  if (msgs.length === 0) {
+    console.log("  ⏱ no mail arrived within 2 minutes.");
+  } else {
+    for (const m of msgs) {
+      console.log(`  📩 from: ${m.from}`);
+      console.log(`     subject: ${m.subject}`);
+      console.log(`     codes: ${extractCodes(m.subject, m.text).join(", ") || "none"}`);
+      console.log(`     links: ${extractLinks(m.text).join(", ") || "none"}`);
+    }
+  }
+
+  await mail.provider.destroy(box);
+  const after = await mail.provider.fetchNew(box);
+  console.log(`\n  🗑 mailbox destroyed. messages remaining addressed to it: ${after.length}\n`);
+  await (mail.provider as ImapProvider).close?.();
+}
+
+/** Generate a persona graph from a description (+ optional site scrape) */
+async function personasGenerate(rest: string[]) {
+  const brain = await resolveBrain(
+    rest.includes("--brain") ? rest[rest.indexOf("--brain") + 1] : undefined,
+  );
+
+  const flagValue = (name: string): string | undefined => {
+    const i = rest.indexOf(name);
+    return i >= 0 ? rest[i + 1] : undefined;
+  };
+
+  let description = flagValue("--from");
+  let site = flagValue("--site");
+  let count = flagValue("--count") ? parseInt(flagValue("--count")!, 10) : undefined;
+
+  const interactive = !description || !site;
+  if (interactive && !process.stdin.isTTY) {
+    // automation: require flags
+  } else if (interactive) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const deadline = Date.now() + 180_000;
+    const ask = async (q: string): Promise<string> => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return "";
+      return Promise.race([
+        rl.question(q),
+        new Promise<string>((res) => setTimeout(() => res(""), remaining)),
+      ]);
+    };
+    try {
+      if (!site) {
+        site = (await ask("  Target site (optional, scraped to learn the product): ")).trim();
+      }
+      if (!description) {
+        description = (
+          await ask("  Describe your ideal customers (roles, company types, size): ")
+        ).trim();
+      }
+    } finally {
+      rl.close();
+    }
+  }
+
+  if (!description) {
+    console.error(
+      '\n  Need to know who your ideal customers are. Either:\n    client-sim personas generate --from "CTOs and platform engineers at Series B startups"\n    ...or run interactively and answer the prompt.',
+    );
+    process.exit(1);
+  }
+
+  const effectiveCount = count && count > 0 ? Math.min(count, 10) : 4;
+  console.log(`\n  generating ${effectiveCount} personas with ${brain.name}...`);
+
+  try {
+    const { written, graph } = await generatePersonas({
+      description,
+      count: effectiveCount,
+      brain: brain as typeof brain & { ask?: (p: string) => Promise<string> },
+      site: site || undefined,
+    });
+    console.log(graph);
+    console.log(`\n  ✓ ${written.length} persona file(s) written to personas/:`);
+    for (const p of written) console.log(`    ${p.id}.yaml — ${p.name} (${p.temperature})`);
+    console.log(`\n  Run them:`);
+    console.log(`    client-sim visit <url> --persona ${written.map((p) => p.id).join(",")}\n`);
+  } catch (e) {
+    console.error(`\n  generation failed: ${(e as Error).message.slice(0, 200)}\n`);
+    process.exit(1);
+  }
+}
+
+/** List available personas (built-in + custom YAML) */
+function personasCommand(args: string[]) {
+  if (args.includes("--new")) {
+    const nameIdx = args.indexOf("--new");
+    const name = args[nameIdx + 1];
+    if (!name || name.startsWith("--")) {
+      console.error("Usage: client-sim personas --new \"Persona Name\"");
+      process.exit(1);
+    }
+    try {
+      const path = newPersonaFile(name);
+      console.log(`\n  ✓ created ${path}`);
+      console.log(`  Edit it, then use: client-sim visit <url> --persona ${path.split("/").pop()?.replace(/\.yaml$/, "")}\n`);
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(1);
+    }
+    return;
+  }
+
+  const { personas, errors } = getPersonaRegistry();
+  console.log(`\n  Available personas (--persona <id>):\n`);
+  console.log(`  ${"id".padEnd(22)} name`.padEnd(50) + "temperature  patience");
+  console.log(`  ${"─".repeat(70)}`);
+  for (const [id, p] of Object.entries(personas)) {
+    const custom = PERSONAS[id] ? "" : "  (custom)";
+    console.log(
+      `  ${id.padEnd(22)} ${p.name.padEnd(28)} ${p.temperature.padEnd(11)} ${p.patience_steps}${custom}`,
+    );
+  }
+  if (errors.length > 0) {
+    console.log(`\n  ⚠ invalid persona files (not loaded):`);
+    for (const e of errors) console.log(`    ${e.file}: ${e.error}`);
+  }
+  console.log(`\n  Add your own: client-sim personas --new "My Persona"  →  personas/<id>.yaml\n`);
+}
+
+async function main() {
+  loadDotEnv();
+  const [command, ...rest] = process.argv.slice(2);
+
+  if (!command || command === "-h" || command === "--help") {
+    printUsage();
+    process.exit(command ? 0 : 1);
+  }
+
+  const positionals: string[] = [];
+  const VALUE_FLAGS = new Set(["--persona", "--personas", "--brain", "--runs"]);
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i].startsWith("--")) {
+      if (VALUE_FLAGS.has(rest[i])) i++; // skip this flag's value
+      continue;
+    }
+    positionals.push(rest[i]);
+  }
+
+  const common = parseCommon(rest);
+
+  switch (command) {
+    case "visit": {
+      const url = positionals[0];
+      if (!url) {
+        console.error("Usage: client-sim visit <url> [--persona cold,warm,hot]");
+        process.exit(1);
+      }
+      await visit(url, common);
+      break;
+    }
+    case "report":
+      await report(
+        positionals.length ? positionals : undefined,
+        rest.includes("--force"),
+      );
+      break;
+    case "fix":
+      await fix(
+        positionals,
+        rest.includes("--brain") ? rest[rest.indexOf("--brain") + 1] : undefined,
+        rest.includes("--force"),
+      );
+      break;
+    case "all": {
+      const url = positionals[0];
+      if (!url) {
+        console.error("Usage: client-sim all <url> [--persona cold,warm,hot]");
+        process.exit(1);
+      }
+      await all(url, common);
+      break;
+    }
+    case "mailtest":
+      await mailtest();
+      break;
+    case "doctor":
+      await runDoctor(common.brain, rest.includes("--force"));
+      break;
+    case "personas": {
+      if (rest[0] === "generate") {
+        await personasGenerate(rest.slice(1));
+      } else {
+        personasCommand(rest);
+      }
+      break;
+    }
+    default:
+      // legacy style: client-sim <url> ...
+      await visit([command, ...positionals][0], common);
+      break;
+  }
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
