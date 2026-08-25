@@ -1,4 +1,19 @@
+import { existsSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import type { Decision } from "../types.js";
+
+/**
+ * Pick the recording that is the actual journey.
+ *
+ * Playwright writes one file per page, so popups and off-screen email renders
+ * each produce their own. The main session is always the longest, and file size
+ * is a reliable proxy for length at a fixed resolution.
+ */
+export function chooseRecording<T extends { file: string; size: number }>(
+  clips: T[],
+): T | null {
+  if (clips.length === 0) return null;
+  return clips.reduce((best, c) => (c.size > best.size ? c : best));
+}
 
 export interface PageSnapshot {
   ariaYaml: string;
@@ -10,10 +25,19 @@ export class BrowserDriver {
   private context!: import("playwright").BrowserContext;
   page!: import("playwright").Page;
   shotsDir!: string;
+  private videoDir?: string;
+  private videoSaved = false;
 
-  async launch(opts: { headless: boolean; shotsDir: string; mobile?: boolean }) {
+  async launch(opts: {
+    headless: boolean;
+    shotsDir: string;
+    mobile?: boolean;
+    /** Where Playwright writes raw per-page recordings. Omit to skip recording entirely. */
+    videoDir?: string;
+  }) {
     const { chromium } = await import("playwright");
     this.shotsDir = opts.shotsDir;
+    this.videoDir = opts.videoDir;
     const viewport = opts.mobile
       ? { width: 390, height: 844 }
       : { width: 1280, height: 800 };
@@ -25,10 +49,9 @@ export class BrowserDriver {
       userAgent: opts.mobile
         ? "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         : undefined,
-      recordVideo: {
-        dir: opts.shotsDir,
-        size: viewport,
-      },
+      ...(opts.videoDir
+        ? { recordVideo: { dir: opts.videoDir, size: viewport } }
+        : {}),
     });
     this.page = await this.context.newPage();
 
@@ -147,12 +170,37 @@ export class BrowserDriver {
     await this.page.waitForTimeout(1000);
   }
 
-  /** Finalize and save the session video. Call before closing the browser. */
+  /**
+   * Finalize the session video. Safe to call from a `finally` — it runs at most
+   * once and tolerates an already-closed context.
+   *
+   * Playwright writes one recording per page, so popups and off-screen email
+   * renders each produce their own file. The main journey is always the longest
+   * one, so that is the file we keep; the rest are discarded. The winner is
+   * *moved* rather than copied, so no duplicate is left behind.
+   */
   async saveVideo(path: string) {
-    const video = this.page?.video();
-    if (!video) return;
-    await this.context?.close().catch(() => {}); // video finalizes on context close
-    await video.saveAs(path).catch(() => {});
+    if (this.videoSaved || !this.videoDir) return;
+    this.videoSaved = true;
+
+    await this.context?.close().catch(() => {}); // recordings finalize on context close
+    if (!existsSync(this.videoDir)) return;
+
+    const clips = readdirSync(this.videoDir)
+      .filter((f) => f.endsWith(".webm"))
+      .map((f) => `${this.videoDir}/${f}`)
+      .map((file) => ({ file, size: statSync(file).size }));
+
+    const main = chooseRecording(clips);
+    if (main) {
+      try {
+        renameSync(main.file, path);
+      } catch {
+        // cross-device or racing writer — leave the raw file rather than lose it
+        return;
+      }
+    }
+    rmSync(this.videoDir, { recursive: true, force: true });
   }
 
   /** Render an email's HTML off-screen and screenshot it — lets the brain SEE any OTP format */

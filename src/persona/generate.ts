@@ -18,14 +18,15 @@ const GeneratedPersonaSchema = z.object({
   max_confusion_before_bail: z.number().min(1).max(10).default(8),
   otp_patience_seconds: z.number().int().min(30).max(600).default(180),
   traits: z.array(z.string().min(1)).min(4).max(10),
-  /** which node in the persona graph this fills */
-  relation: z.enum(["core", "nearest-neighbor"]).default("core"),
+  /** how far this persona sits from the ideal customer */
+  relation: z.enum(["core", "adjacent", "edge"]).default("core"),
 });
 
 const GeneratedSetSchema = z.array(GeneratedPersonaSchema);
 
 export interface GenerateOptions {
-  description: string;
+  /** Ideal-customer description. Optional when a site is given — the audience is inferred. */
+  description?: string;
   count: number;
   brain: Brain & { ask?(prompt: string): Promise<string> };
   /** optional target site — scraped to learn what the product is and who it serves */
@@ -37,7 +38,7 @@ export interface GeneratedPersona extends z.infer<typeof GeneratedPersonaSchema>
 }
 
 /** Scrape the target landing page (a11y text) so personas fit the actual product */
-async function scrapeSiteContext(url: string): Promise<string> {
+export async function scrapeSiteContext(url: string): Promise<string> {
   const { BrowserDriver } = await import("../browser/driver.js");
   const driver = new BrowserDriver();
   try {
@@ -76,18 +77,35 @@ Apply the installed user-personas skill (persona construction methodology) if av
 PRODUCT CONTEXT${opts.site ? " (scraped from the live site)" : ""}:
 ${siteContext || "(no site provided - rely on the description below)"}
 
-THE USER'S IDEAL CUSTOMERS:
-${opts.description}
+WHO THE PRODUCT IS FOR:
+${opts.description || "(not stated - infer it from the product context above)"}
 
-Generate ${count} DISTINCT prospect personas as a persona graph:
-- 1-2 "core" personas: the ideal customers described above, most likely to convert
-- the rest "nearest-neighbor" variants: adjacent roles, company sizes, or industries that plausibly buy the same product but behave differently (companies differ!)
+Generate ${count} DISTINCT personas covering the FULL RANGE of people who actually
+land on this site - not variations on one ideal buyer. Onboarding has to work for
+everyone who shows up, so spread the set across three tiers:
 
-ANTI-SIMILARITY RULES (strict):
+- "core" (about a third): the ideal customers, most likely to convert.
+- "adjacent" (about a third): different roles, seniorities, company sizes or
+  industries who could plausibly buy but behave differently.
+- "edge" (about a third): people who land here but are NOT the target - wrong use
+  case, no budget, a competitor sizing you up, a student, someone who clicked the
+  wrong ad, an enterprise buyer hitting a self-serve flow. These reveal whether the
+  onboarding qualifies people quickly or wastes their time.
+
+SPREAD ACROSS THESE CIRCUMSTANCES TOO (independent of tier):
+- tech comfort: at least one "low" in the set
+- urgency: some idly browsing, some needing a solution today
+- trust posture: at least one privacy-sensitive or previously-burned visitor
+- budget: at least one who checks price before anything else
+- reading style: at least one who skims (non-native English reader, or in a hurry)
+${count >= 4 ? '- accessibility: at least one with a real constraint (keyboard-only, screen reader, low vision) reflected in their traits\n' : ""}
+STRICT RULES:
+- Any two personas must differ on at least THREE of the axes above.
 - No trait may appear in two personas.
-- Each persona must have a different COMPLETE condition in its goal.
-- Vary temperature across the set (mix cold/warm/hot where realistic).
-- Traits are written as concrete behavioral rules, not adjectives.
+- Each persona needs a different COMPLETE condition in its goal.
+- Mix temperatures across the set - do not make them all warm.
+- Traits are concrete behavioral rules ("leaves if a card is required for a trial"),
+  never adjectives ("cautious").
 
 Reply ONLY with a JSON array:
 [{
@@ -100,7 +118,7 @@ Reply ONLY with a JSON array:
   "max_confusion_before_bail": 5-9,
   "otp_patience_seconds": 60-300,
   "traits": ["6-8 concrete behavioral rules"],
-  "relation": "core"|"nearest-neighbor"
+  "relation": "core"|"adjacent"|"edge"
 }]`;
 
   const text = await opts.brain.ask(prompt);
@@ -126,23 +144,23 @@ Reply ONLY with a JSON array:
     written.push({ ...p, file });
   }
 
-  // render the persona graph
-  const core = written.filter((p) => p.relation === "core");
-  const neighbors = written.filter((p) => p.relation !== "core");
-  const lines = ["", "  persona graph:", ""];
-  for (const c of core) {
-    lines.push(`  ● ${c.id} (${c.name}) — core ideal customer`);
-    const related = neighbors.filter(
-      (n) => n.temperature === c.temperature || n.tech_comfort === c.tech_comfort,
-    );
-    for (const n of related) {
-      lines.push(`     ├─ ○ ${n.id} (${n.name}) — nearest neighbor`);
+  // coverage summary: how far the set actually spreads from the ideal customer
+  const TIERS = [
+    { key: "core", mark: "●", label: "core     ", note: "ideal customer" },
+    { key: "adjacent", mark: "○", label: "adjacent ", note: "different role / size / industry" },
+    { key: "edge", mark: "◌", label: "edge     ", note: "lands here but is not the target" },
+  ] as const;
+
+  const lines = ["", "  persona coverage:", ""];
+  for (const tier of TIERS) {
+    const members = written.filter((p) => p.relation === tier.key);
+    if (members.length === 0) continue;
+    lines.push(`  ${tier.mark} ${tier.label} ${tier.note}`);
+    for (const p of members) {
+      lines.push(`      ${p.id} — ${p.name} (${p.temperature}, ${p.tech_comfort} tech)`);
     }
+    lines.push("");
   }
-  const orphans = neighbors.filter(
-    (n) => !core.some((c) => n.temperature === c.temperature || n.tech_comfort === c.tech_comfort),
-  );
-  for (const n of orphans) lines.push(`  ○ ${n.id} (${n.name}) — nearest neighbor`);
 
   return { written, graph: lines.join("\n") };
 }

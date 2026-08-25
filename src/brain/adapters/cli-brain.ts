@@ -1,64 +1,77 @@
+import { tmpdir } from "node:os";
 import type { Brain, BrainContext, Decision } from "../../types.js";
 import { DecisionSchema, VerdictSchema } from "../../types.js";
 
 const TIMEOUT_MS = 180_000;
+/** Backoff after a failed CLI call (rate limit, timeout) — not after a bad reply. */
+const CALL_RETRY_BACKOFF_MS = 20_000;
 
 export interface CliBrainOptions {
   name: string;
   command: string;
-  /** Build CLI args. Receives the prompt, persistent session id, and optional model override. */
-  args: (prompt: string, sessionId?: string, model?: string, effort?: string) => string[];
+  /** Build CLI args from the prompt plus per-call overrides. */
+  args: (prompt: string, o: CliCallOptions) => string[];
   /** Extract the assistant text from the CLI's raw stdout */
   extractText: (stdout: string) => string;
-  /** Parse a persistent session id from the first call's output (stdout+stderr) */
-  parseSessionId?: (output: string) => string | undefined;
-  /** Pre-generate a session id to pass from the very first call */
-  initSessionId?: () => string;
   timeoutMs?: number;
   /** Model override passed to the CLI (e.g. "opus", "gpt-5.2") */
   model?: string;
   /** Reasoning effort override (low|medium|high) where the CLI supports it */
   effort?: string;
+  /** Directory outside the working dir the CLI may read (session screenshots) */
+  allowDir?: string;
+}
+
+export interface CliCallOptions {
+  model?: string;
+  effort?: string;
+  allowDir?: string;
 }
 
 export function makeCliBrain(opts: CliBrainOptions): Brain & {
   ask(prompt: string): Promise<string>;
   model?: string;
 } {
-  let sessionId = opts.initSessionId?.();
   const self = {
     name: opts.name,
     model: opts.model,
     effort: opts.effort,
-    /** Free-form question inside the same persistent session. Used for verification. */
+    allowDir: opts.allowDir,
+    /** Free-form question. Used for verification and by the expert panel. */
     async ask(prompt: string): Promise<string> {
       return runOnce(prompt);
     },
     async decide(ctx: BrainContext): Promise<Decision> {
-      const { buildPrompt } = await import("../prompt.js");
+      const { buildPrompt, buildRepairPrompt } = await import("../prompt.js");
       const basePrompt = buildPrompt(ctx);
       let lastError = "";
+      let lastReply = "";
 
-      // 3 attempts with backoff — transient rate limits must not kill OTP runs
       for (let attempt = 0; attempt < 3; attempt++) {
-        if (attempt > 0) {
-          await new Promise((r) => setTimeout(r, 20_000 * attempt));
-        }
+        // a malformed reply only needs reformatting, so resend the reply rather
+        // than the whole step prompt — the page snapshot dominates its size
         const prompt =
-          attempt === 0
-            ? basePrompt
-            : `${basePrompt}\n\nIMPORTANT: Your previous reply was not valid JSON (${lastError}). Reply with ONLY the JSON object, nothing else.`;
+          attempt > 0 && lastReply
+            ? buildRepairPrompt(lastReply, lastError)
+            : basePrompt;
 
         let text: string;
         try {
           text = await runOnce(prompt);
         } catch (e) {
+          // the call itself failed — likely transient, so back off before retrying
           lastError = (e as Error).message;
+          lastReply = "";
+          if (attempt < 2) {
+            await new Promise((r) => setTimeout(r, CALL_RETRY_BACKOFF_MS * (attempt + 1)));
+          }
           continue;
         }
+
         const parsed = tryParseDecision(text);
         if ("decision" in parsed) return parsed.decision;
         lastError = parsed.error;
+        lastReply = text;
       }
 
       throw new Error(
@@ -69,8 +82,11 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
 
   async function runOnce(prompt: string): Promise<string> {
     const result = await import("execa").then(({ execa }) =>
-      execa(opts.command, opts.args(prompt, sessionId, self.model, self.effort), {
+      execa(opts.command, opts.args(prompt, { model: self.model, effort: self.effort, allowDir: self.allowDir }), {
         stdin: "ignore",
+        // run outside the project so the CLI does not load this repo's own
+        // AGENTS.md/CLAUDE.md into a persona that is meant to know nothing
+        cwd: tmpdir(),
         timeout: opts.timeoutMs ?? TIMEOUT_MS,
         reject: false,
       }),
@@ -79,11 +95,6 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
       throw new Error(
         `${opts.name} CLI failed: ${result.stderr || result.shortMessage}`,
       );
-    }
-    if (!sessionId && opts.parseSessionId) {
-      sessionId =
-        opts.parseSessionId(result.stdout + "\n" + result.stderr) ??
-        sessionId;
     }
     return opts.extractText(result.stdout);
   }
