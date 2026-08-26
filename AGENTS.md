@@ -226,9 +226,13 @@ traits:                      # free-text personality lines — these steer the L
 
 Traits are the personality lever — write them like a character brief, first-person reactions the LLM should mimic. Invalid files are listed with reasons by `client-simulator personas` and skipped (never crash runs).
 
-## Safety (hard-coded, non-negotiable)
+## Safety (non-negotiable)
 
+Mechanically enforced by the harness:
 - Never enters payment/billing flows (URL wall terminates the session)
+- The persona's email address is always the assigned mailbox — invented addresses are overridden
+
+Enforced via persona prompt rules (strict, but not mechanical):
 - Never uses OAuth/SSO/social login
 - Never deletes data or invites teammates
 

@@ -63,6 +63,22 @@ export const DecisionSchema = z.object({
 export type Decision = z.infer<typeof DecisionSchema>;
 export type DecisionAction = Decision["action"];
 
+/** Schema for a line of session.jsonl — shared artifacts are untrusted input. */
+export const StepEventSchema = z.object({
+  n: z.number(),
+  url: z.string(),
+  timestamp: z.string(),
+  screenshot: z.string().optional(),
+  decision: DecisionSchema,
+  note: z.string().optional(),
+});
+
+export const ExitReasonSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("completed"), summary: z.string() }),
+  z.object({ kind: z.literal("abandoned"), reason: z.string(), question: z.string() }),
+  z.object({ kind: z.literal("guardrail"), detail: z.string() }),
+]);
+
 export const VerdictSchema = z.object({
   achieved: z.boolean(),
   note: z.string().describe("What is missing or what confirms completion"),

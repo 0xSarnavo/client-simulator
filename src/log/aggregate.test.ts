@@ -56,6 +56,35 @@ describe("loadSessions", () => {
     const loaded = loadSessions([bad, good]);
     assert.equal(loaded.length, 1, "one corrupt session discarded a valid one");
   });
+
+  it("skips shape-valid meta without an exit instead of crashing later", () => {
+    const hostile = join(scratch, "no-exit");
+    mkdirSync(hostile, { recursive: true });
+    writeFileSync(join(hostile, "meta.json"), JSON.stringify({ url: "https://x.com", personaId: "cold", brain: "claude" }));
+    writeFileSync(join(hostile, "session.jsonl"), JSON.stringify({ n: 1, url: "u", timestamp: "", decision: { thought: "t", emotion: "e", confusion: 1, action: { type: "back" } } }));
+    assert.doesNotThrow(() => loadSessions([hostile]));
+    assert.equal(loadSessions([hostile]).length, 0);
+  });
+
+  it("drops malformed event lines but keeps the session's valid steps", () => {
+    const dir = join(scratch, "mixed-events");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "meta.json"),
+      JSON.stringify({ url: "https://x.com", personaId: "cold", brain: "claude", exit: { kind: "completed", summary: "s" } }),
+    );
+    writeFileSync(
+      join(dir, "session.jsonl"),
+      [
+        JSON.stringify({ n: 1, url: "u", timestamp: "", decision: { thought: "t", emotion: "e", confusion: 2, action: { type: "back" } } }),
+        JSON.stringify({ n: 2, url: "u", timestamp: "" }), // no decision — used to crash stage 2
+        "not json at all",
+      ].join("\n"),
+    );
+    const loaded = loadSessions([dir]);
+    assert.equal(loaded.length, 1);
+    assert.equal(loaded[0].events.length, 1);
+  });
 });
 
 describe("generateAggregate", () => {

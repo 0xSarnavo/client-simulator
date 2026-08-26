@@ -1,5 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
+import { z } from "zod";
 import type { ExitReason, StepEvent } from "../types.js";
+import { ExitReasonSchema, StepEventSchema } from "../types.js";
 import { PERSONAS } from "../persona/presets.js";
 export { siteSlug } from "../runs.js";
 
@@ -11,6 +13,18 @@ export interface SessionMeta {
   date?: string;
 }
 
+const MetaSchema = z.object({
+  url: z.string(),
+  personaId: z.string(),
+  brain: z.string(),
+  exit: ExitReasonSchema,
+});
+
+/**
+ * Sessions are shared artifacts — a donated runs/ folder is untrusted input.
+ * Validate shape at the boundary: invalid sessions are skipped with a warning
+ * instead of crashing stages 2-3 mid-report.
+ */
 export function loadSessions(dirs: string[]): {
   dir: string;
   meta: SessionMeta;
@@ -22,12 +36,33 @@ export function loadSessions(dirs: string[]): {
     const eventsPath = `${dir}/session.jsonl`;
     if (!existsSync(metaPath) || !existsSync(eventsPath)) continue;
     try {
-      const meta = JSON.parse(readFileSync(metaPath, "utf8")) as SessionMeta;
-      const events = readFileSync(eventsPath, "utf8")
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .map((l) => JSON.parse(l));
+      const metaRaw = JSON.parse(readFileSync(metaPath, "utf8"));
+      const metaRes = MetaSchema.safeParse(metaRaw);
+      if (!metaRes.success) {
+        console.warn(`  ⚠ skipping ${dir}: meta.json has an unexpected shape`);
+        continue;
+      }
+      const meta = metaRes.data as SessionMeta;
+
+      const events: StepEvent[] = [];
+      let badLines = 0;
+      for (const line of readFileSync(eventsPath, "utf8").split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const res = StepEventSchema.safeParse(JSON.parse(line));
+          if (res.success) events.push(res.data);
+          else badLines++;
+        } catch {
+          badLines++;
+        }
+      }
+      if (events.length === 0) {
+        console.warn(`  ⚠ skipping ${dir}: no valid step events in session.jsonl`);
+        continue;
+      }
+      if (badLines > 0) {
+        console.warn(`  ⚠ ${dir}: dropped ${badLines} malformed event line(s)`);
+      }
       sessions.push({ dir, meta, events });
     } catch {
       // skip unreadable session dirs
