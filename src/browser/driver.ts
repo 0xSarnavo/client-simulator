@@ -9,6 +9,19 @@ import { CURSOR_SCRIPT } from "./cursor.js";
  * each produce their own. The main session is always the longest, and file size
  * is a reliable proxy for length at a fixed resolution.
  */
+/**
+ * Whether text has to be typed as real keystrokes instead of set in one shot.
+ *
+ * fill() writes the value directly, so a six-box OTP input (maxlength=1 each)
+ * keeps only the first character and the page's auto-advance never fires. The
+ * persona then spends a step per digit and reports the site as broken for it —
+ * which is exactly what happened on both modelcode.ai and neatlogs.com.
+ * maxLength is -1 on fields that set no limit.
+ */
+export function needsKeystrokes(maxLength: number, textLength: number): boolean {
+  return maxLength > 0 && maxLength < textLength;
+}
+
 export function chooseRecording<T extends { file: string; size: number }>(
   clips: T[],
 ): T | null {
@@ -135,7 +148,17 @@ export class BrowserDriver {
       }
       case "type": {
         const el = this.page.locator(`aria-ref=${a.target}`);
-        await el.fill(a.text, { timeout: 10_000 });
+        const maxLength = await el
+          .evaluate((node) => (node as HTMLInputElement).maxLength ?? -1)
+          .catch(() => -1);
+        if (needsKeystrokes(maxLength, a.text.length)) {
+          // One box per character. Click in, then let the page's own key
+          // handlers move focus along as each character lands.
+          await el.click({ timeout: 10_000 });
+          await this.page.keyboard.type(a.text, { delay: 30 });
+        } else {
+          await el.fill(a.text, { timeout: 10_000 });
+        }
         break;
       }
       case "select": {
@@ -237,6 +260,15 @@ export class BrowserDriver {
       const page = await context.newPage();
       await page.setContent(html, { waitUntil: "load", timeout: 15_000 }).catch(() => {});
       await page.waitForTimeout(500);
+      // Some mail renders to nothing here — content behind blocked remote CSS,
+      // or a layout that needs the scripts we refuse to run. Offering a blank
+      // white PNG is worse than offering no picture: a persona told to read it
+      // reads nothing, disbelieves the text, and walks out of a working flow.
+      const visible = ((await page.textContent("body").catch(() => "")) ?? "").trim();
+      if (!visible) {
+        await page.close();
+        return "";
+      }
       await page.screenshot({ path, fullPage: true });
       await page.close();
       return path;
