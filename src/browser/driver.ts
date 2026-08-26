@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import type { Decision } from "../types.js";
+import { CURSOR_SCRIPT } from "./cursor.js";
 
 /**
  * Pick the recording that is the actual journey.
@@ -53,6 +54,9 @@ export class BrowserDriver {
         ? { recordVideo: { dir: opts.videoDir, size: viewport } }
         : {}),
     });
+    // only worth injecting when there is a recording to watch
+    if (opts.videoDir) await this.context.addInitScript(CURSOR_SCRIPT);
+
     this.page = await this.context.newPage();
 
     // Bulletproof popup/new-tab handling: always follow the newest page,
