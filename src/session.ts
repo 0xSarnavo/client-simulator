@@ -29,7 +29,8 @@ export interface SessionResult {
 }
 
 const MAX_CONSECUTIVE_FAILURES = 4;
-const MAX_VERIFICATIONS = 2;
+/** Completion claims re-checked per session. Each is one un-retried call. */
+export const MAX_VERIFICATIONS = 2;
 
 export async function runSession(opts: SessionOptions): Promise<SessionResult> {
   const { driver, persona, brain } = opts;
