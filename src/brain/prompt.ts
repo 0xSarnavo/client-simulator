@@ -1,5 +1,6 @@
 import type { BrainContext, StepEvent } from "../types.js";
 import { SAFETY_RULES } from "../types.js";
+import { pruneSnapshot } from "../browser/prune.js";
 
 const SCHEMA_INSTRUCTIONS = `Reply with ONLY a single JSON object, no prose before or after, matching exactly this schema:
 
@@ -107,7 +108,7 @@ HOW TO BEHAVE:
 - Step number: ${ctx.stepNumber}
 ${ctx.emailAddress ? `\nYOUR EMAIL ADDRESS (use this in signup forms): ${ctx.emailAddress}\nWhen a site says it sent you a code or link, use check_email to open your inbox and wait for it.\nNEVER invent an email address. Every email field gets YOUR EMAIL ADDRESS above, copied exactly. No exceptions — not a work email, not a company email, not a made-up one.` : ""}
 
-HARD SAFETY RULES (non-negotiable, enforced by the system):
+HARD SAFETY RULES (non-negotiable — the payment wall and email-address override are mechanically enforced by the harness; the rest are absolute rules you must never break):
 ${SAFETY_RULES}
 If the only path forward violates these rules, ABANDON and say so in your reason.
 ${ctx.emailResult ? `\n📬 YOUR INBOX (result of last check):\n${ctx.emailResult}` : ""}
@@ -116,7 +117,7 @@ ${historyBlock ? `\n${historyBlock}` : "\nYou have just arrived at this website.
 
 CURRENT PAGE SNAPSHOT (accessibility tree):
 \`\`\`yaml
-${ctx.ariaYaml}
+${pruneSnapshot(ctx.ariaYaml)}
 \`\`\`
 
 ${SCHEMA_INSTRUCTIONS}`;
