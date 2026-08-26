@@ -1,6 +1,7 @@
 node_modules/
 dist/
 runs/
+personas/
 package-lock.json
 .DS_Store
 .env
