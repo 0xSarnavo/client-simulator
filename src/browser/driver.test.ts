@@ -1,6 +1,23 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { chooseRecording } from "./driver.js";
+import { chooseRecording, needsKeystrokes } from "./driver.js";
+
+describe("needsKeystrokes", () => {
+  it("types a six-digit code into one-character boxes", () => {
+    // fill() would leave "9" in box one and drop the rest
+    assert.equal(needsKeystrokes(1, 6), true);
+  });
+
+  it("fills ordinary fields directly", () => {
+    assert.equal(needsKeystrokes(-1, 32), false, "no maxlength set");
+    assert.equal(needsKeystrokes(64, 32), false, "limit longer than the text");
+    assert.equal(needsKeystrokes(6, 6), false, "whole code fits in one field");
+  });
+
+  it("treats a maxlength of zero as no limit, not an empty one", () => {
+    assert.equal(needsKeystrokes(0, 6), false);
+  });
+});
 
 describe("chooseRecording", () => {
   it("returns null when nothing was recorded", () => {
