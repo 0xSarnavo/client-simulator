@@ -8,6 +8,33 @@ export const MAX_DECIDE_ATTEMPTS = 3;
 /** Backoff after a failed CLI call (rate limit, timeout) — not after a bad reply. */
 const CALL_RETRY_BACKOFF_MS = 20_000;
 
+/**
+ * Allowlisted environment for spawned brain CLIs. Everything else — including
+ * CLIENTSIM_* secrets like the IMAP password — stays in this process and out
+ * of every subprocess. Proxy/TLS vars are kept so corporate networks work.
+ */
+const SPAWN_ENV_ALLOWLIST = [
+  "PATH", "HOME", "SHELL", "USER", "LOGNAME",
+  "TMPDIR", "TEMP", "TMP",
+  "LANG", "LC_ALL", "TERM",
+  "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+  "SSL_CERT_FILE", "SSL_CERT_DIR",
+  "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
+  // brain CLI auth/config/endpoints — named here so they stay opt-in while
+  // unknown vars (incl. CLIENTSIM_* secrets) never blanket-inherit
+  "CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL",
+  "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_HOME",
+];
+
+export function spawnEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of SPAWN_ENV_ALLOWLIST) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
 export interface CliBrainOptions {
   name: string;
   command: string;
@@ -22,6 +49,12 @@ export interface CliBrainOptions {
   effort?: string;
   /** Directory outside the working dir the CLI may read (session screenshots) */
   allowDir?: string;
+  /**
+   * Extra environment for this brain (e.g. opencode's OPENCODE_CONFIG).
+   * Merged over a sanitized allowlist — children never inherit the full
+   * parent env, so secrets like CLIENTSIM_IMAP_PASS stay in this process.
+   */
+  env?: Record<string, string>;
 }
 
 export interface CliCallOptions {
@@ -89,6 +122,10 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
         // run outside the project so the CLI does not load this repo's own
         // AGENTS.md/CLAUDE.md into a persona that is meant to know nothing
         cwd: tmpdir(),
+        // extendEnv:false — execa merges `env` over the full parent env by
+        // default, which would silently defeat the allowlist below
+        extendEnv: false,
+        env: { ...spawnEnv(), ...(opts.env ?? {}) },
         timeout: opts.timeoutMs ?? TIMEOUT_MS,
         reject: false,
       }),
