@@ -34,6 +34,10 @@ export function createOpencodeBrain(role: BrainRole = "persona") {
     // no -s: stateless per call, same as the other adapters — journey memory
     // comes from the tiered history the prompt builder renders
     command: "opencode",
+    // reads outside the CLI's cwd are permission-rejected in non-interactive
+    // `run` (there is no --add-dir equivalent), so prompts must never point
+    // this brain at screenshot files — a rejected read stalls some models
+    readsFiles: false,
     args: (prompt, { model }) => [
       "run",
       "--print-logs",

@@ -105,6 +105,8 @@ export interface BrainContext {
   emailAddress?: string;
   /** Result of the last check_email action, rendered for the next think step */
   emailResult?: string;
+  /** False (default) when this brain cannot read files — prompts then omit screenshot pointers */
+  readsFiles?: boolean;
 }
 
 export interface Brain {
@@ -112,4 +114,12 @@ export interface Brain {
   decide(ctx: BrainContext): Promise<Decision>;
   /** Free-form question inside the same persistent session (verification etc.) */
   ask?(prompt: string): Promise<string>;
+  /**
+   * Whether the persona can actually read files (page/email screenshots).
+   * claude can (--add-dir opts the session dir in); opencode and codex
+   * personas get their reads permission-rejected in non-interactive mode.
+   * Prompts must never tell a brain to do something it cannot do — a
+   * rejected tool call makes some models stall instead of replying.
+   */
+  readsFiles?: boolean;
 }
