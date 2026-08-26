@@ -1,0 +1,21 @@
+- heading "Start your free trial" [level=1] [ref=e1]
+- text: Join 12,000 teams already using Acme.
+- form [ref=e2]:
+  - text: Work email
+  - textbox "you@company.com" [ref=e3]
+  - text: Password
+  - textbox [ref=e4]
+  - checkbox "Send me product updates" [ref=e5]
+  - button "Create account" [ref=e6]
+- text: By creating an account you agree to our Terms of Service and Privacy Policy. We will start your 14-day free trial today and you can cancel at any time from your account settings. After the trial ends your card will be charged $49 per month.
+- generic "ctx_ver=Z39.88-2004&rft_val_fmt=info%3Aofi%2Ffmt%3Akev%3Amtx%3Ajournal&rft.genre=article"
+- generic "Trusted by 12,000 teams — no credit card required"
+- text: $49/month after trial
+- text: Invalid email address
+- link "Pricing" [ref=e7]:
+  - /url: /pricing
+- link "Start free trial" [ref=e10]:
+  - /url: /signup?utm_source=blog&utm_campaign=trial
+- link [ref=e8]:
+  - /url: "#faq"
+- generic "utm_source=blog&utm_medium=cta&utm_campaign=trial" [ref=e9]

@@ -1,0 +1,144 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - heading [level=1] [ref=e4]
+    - paragraph [ref=e6]:
+      - text: The global coordination of the DNS Root, IP addressing, and other Internet protocol resources is performed as the Internet Assigned Numbers Authority (IANA) functions.
+      - link "Learn more." [ref=e7] [cursor=pointer]:
+        - /url: /about
+  - generic [ref=e9]:
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - heading [level=2] [ref=e12]:
+          - link "Domain Names" [ref=e13] [cursor=pointer]:
+            - /url: /domains
+        - paragraph [ref=e14]: Management of the DNS Root Zone (assignments of ccTLDs and gTLDs) along with other functions such as the .int and .arpa zones.
+        - list [ref=e15]:
+          - listitem [ref=e16]:
+            - link "Root Zone Management" [ref=e17] [cursor=pointer]:
+              - /url: /domains/root
+          - listitem [ref=e18]:
+            - link "Database of Top Level Domains" [ref=e19] [cursor=pointer]:
+              - /url: /domains/root/db
+          - listitem [ref=e20]:
+            - link ".int Registry" [ref=e21] [cursor=pointer]:
+              - /url: /domains/int
+          - listitem [ref=e22]:
+            - link ".arpa Registry" [ref=e23] [cursor=pointer]:
+              - /url: /domains/arpa
+          - listitem [ref=e24]:
+            - link "IDN Practices Repository" [ref=e25] [cursor=pointer]:
+              - /url: /domains/idn-tables
+      - generic [ref=e26]:
+        - heading [level=2] [ref=e27]:
+          - link "Number Resources" [ref=e28] [cursor=pointer]:
+            - /url: /numbers
+        - paragraph [ref=e29]: Coordination of the global IP and AS number spaces, such as allocations made to Regional Internet Registries.
+        - list [ref=e30]:
+          - listitem [ref=e31]:
+            - link "IP Addresses & AS Numbers" [ref=e32] [cursor=pointer]:
+              - /url: /numbers
+          - listitem [ref=e33]:
+            - link "Network abuse information" [ref=e34] [cursor=pointer]:
+              - /url: /help/abuse
+      - generic [ref=e35]:
+        - heading [level=2] [ref=e36]:
+          - link "Protocol Assignments" [ref=e37] [cursor=pointer]:
+            - /url: /protocols
+        - paragraph [ref=e38]: The central repository for protocol name and number registries used in many Internet protocols.
+        - list [ref=e39]:
+          - listitem [ref=e40]:
+            - link "Protocol Registries" [ref=e41] [cursor=pointer]:
+              - /url: /protocols
+          - listitem [ref=e42]:
+            - link "Apply for an assignment" [ref=e43] [cursor=pointer]:
+              - /url: /protocols/apply
+          - listitem [ref=e44]:
+            - link "Time Zone Database" [ref=e45] [cursor=pointer]:
+              - /url: /time-zones
+    - textbox "search" [ref=e52]
+  - contentinfo [ref=e53]:
+    - generic [ref=e54]:
+      - table [ref=e55]:
+        - rowgroup [ref=e56]:
+          - row [ref=e57]:
+            - cell [ref=e58]:
+              - link "Domain Names" [ref=e59] [cursor=pointer]:
+                - /url: /domains
+            - cell [ref=e60]:
+              - list:
+                - listitem [ref=e61]:
+                  - link "Root Zone Registry" [ref=e62] [cursor=pointer]:
+                    - /url: /domains/root
+                - listitem [ref=e63]:
+                  - link ".INT Registry" [ref=e64] [cursor=pointer]:
+                    - /url: /domains/int
+                - listitem [ref=e65]:
+                  - link ".ARPA Registry" [ref=e66] [cursor=pointer]:
+                    - /url: /domains/arpa
+                - listitem [ref=e67]:
+                  - link "IDN Repository" [ref=e68] [cursor=pointer]:
+                    - /url: /domains/idn-tables
+          - row [ref=e69]:
+            - cell [ref=e70]:
+              - link "Number Resources" [ref=e71] [cursor=pointer]:
+                - /url: /numbers
+            - cell [ref=e72]:
+              - list:
+                - listitem [ref=e73]:
+                  - link "Number Registries" [ref=e74] [cursor=pointer]:
+                    - /url: /numbers/registries
+                - listitem [ref=e75]:
+                  - link "RIR Allocation Data" [ref=e76] [cursor=pointer]:
+                    - /url: /numbers/allocations/
+                - listitem [ref=e77]:
+                  - link "Abuse Information" [ref=e78] [cursor=pointer]:
+                    - /url: /help/abuse
+          - row [ref=e79]:
+            - cell [ref=e80]:
+              - link "Protocols" [ref=e81] [cursor=pointer]:
+                - /url: /protocols
+            - cell [ref=e82]:
+              - list:
+                - listitem [ref=e83]:
+                  - link "Protocol Registries" [ref=e84] [cursor=pointer]:
+                    - /url: /protocols
+                - listitem [ref=e85]:
+                  - link "Time Zone Database" [ref=e86] [cursor=pointer]:
+                    - /url: /time-zones
+          - row [ref=e87]:
+            - cell [ref=e88]:
+              - link "About Us" [ref=e89] [cursor=pointer]:
+                - /url: /about
+            - cell [ref=e90]:
+              - list:
+                - listitem [ref=e91]:
+                  - link "News" [ref=e92] [cursor=pointer]:
+                    - /url: /news
+                - listitem [ref=e93]:
+                  - link "Performance" [ref=e94] [cursor=pointer]:
+                    - /url: /performance
+                - listitem [ref=e95]:
+                  - link "The Organization" [ref=e96] [cursor=pointer]:
+                    - /url: /about/organization
+                - listitem [ref=e97]:
+                  - link "Archive" [ref=e98] [cursor=pointer]:
+                    - /url: /archive
+                - listitem [ref=e99]:
+                  - link "Contact Us" [ref=e100] [cursor=pointer]:
+                    - /url: /contact
+      - paragraph [ref=e102]:
+        - text: The IANA functions coordinate the Internet’s globally unique identifiers, and are provided by
+        - link "Public Technical Identifiers" [ref=e103] [cursor=pointer]:
+          - /url: https://pti.icann.org
+        - text: ", an affiliate of"
+        - link "ICANN" [ref=e104] [cursor=pointer]:
+          - /url: https://www.icann.org/
+        - text: .
+      - generic [ref=e105]:
+        - list:
+          - listitem [ref=e106]:
+            - link "Privacy Policy" [ref=e107] [cursor=pointer]:
+              - /url: https://www.icann.org/privacy/policy
+          - listitem [ref=e108]:
+            - link "Terms of Service" [ref=e109] [cursor=pointer]:
+              - /url: https://www.icann.org/privacy/tos
