@@ -12,7 +12,7 @@ import { buildVerificationPrompt } from "./brain/prompt.js";
 import { blockedAction } from "./safety.js";
 import { parseVerdict } from "./brain/adapters/cli-brain.js";
 import type { MailProvider, Mailbox, MailMessage } from "./mail/types.js";
-import { extractCodes } from "./mail/types.js";
+import { extractCodes, stripInvisible } from "./mail/types.js";
 
 export interface SessionOptions {
   url: string;
@@ -47,6 +47,8 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
   let failedHint: string | undefined;
   let verificationsUsed = 0;
   let emailResult: string | undefined;
+  /** The last mail that actually landed — it stays in the inbox after later checks */
+  let arrivedMail: string | undefined;
   let emailWaitSeconds = 0;
   if (opts.mail) {
     console.log(`  mailbox: ${opts.mail.box.address}`);
@@ -76,6 +78,7 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
       failedHint,
       emailAddress: opts.mail?.box.address,
       emailResult,
+      readsFiles: opts.brain.readsFiles ?? false,
     };
 
     // THINK
@@ -163,10 +166,12 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
     // ACT — check_email is handled by the mail layer, not the browser
     if (decision.action.type === "check_email") {
       const waitSeconds = decision.action.seconds;
-      emailResult = await checkInbox(opts, waitSeconds, () => {
+      const check = await checkInbox(opts, waitSeconds, () => {
         emailWaitSeconds += waitSeconds;
         return emailWaitSeconds > (persona.otp_patience_seconds ?? 180);
       });
+      if (check.mail) arrivedMail = check.mail;
+      emailResult = mergeInbox(check, arrivedMail);
       consecutiveFailures = 0;
       commit();
       continue; // no page change; next think sees the inbox result
@@ -245,13 +250,37 @@ async function verifyGoal(
   }
 }
 
+export interface InboxCheck {
+  /** What to show when nothing has ever arrived (empty inbox, failure, no mailbox) */
+  text: string;
+  /** Rendered messages, set only when this check found new mail */
+  mail?: string;
+}
+
+/**
+ * What the persona sees in their inbox on the next step.
+ *
+ * The provider reports only NEW messages, so a second check after the code
+ * already landed comes back empty — and the code would vanish from the prompt,
+ * which is exactly how a working magic-link flow got abandoned as broken. Mail
+ * that arrived stays visible, and the "give up waiting" nudge is suppressed
+ * once there is something to act on.
+ */
+export function mergeInbox(check: InboxCheck, arrived?: string): string {
+  if (check.mail) return check.mail;
+  if (!arrived) return check.text;
+  return `${arrived}\n\n(you checked again — nothing NEW arrived, but the message above is still sitting in your inbox. Use it instead of waiting for another one.)`;
+}
+
 /** Poll the persona's mailbox, waiting up to `seconds` for something new to arrive. */
 async function checkInbox(
   opts: SessionOptions,
   seconds: number,
   onWaited: () => boolean,
-): Promise<string> {
-  if (!opts.mail) return "(no mailbox is configured in this environment — you cannot receive email)";
+): Promise<InboxCheck> {
+  if (!opts.mail) {
+    return { text: "(no mailbox is configured in this environment — you cannot receive email)" };
+  }
 
   const deadline = Date.now() + seconds * 1000;
   process.stdout.write(`  📬 checking inbox (${seconds}s)...`);
@@ -261,7 +290,7 @@ async function checkInbox(
       msgs = await opts.mail.provider.fetchNew(opts.mail.box);
     } catch (e) {
       console.log(` failed`);
-      return `inbox check failed: ${trim((e as Error).message, 120)}`;
+      return { text: `inbox check failed: ${trim((e as Error).message, 120)}` };
     }
     if (msgs.length > 0) break;
     await new Promise((r) => setTimeout(r, 3000));
@@ -275,26 +304,36 @@ async function checkInbox(
 
   if (msgs.length === 0) {
     const exhausted = onWaited();
-    return `(no new mail after waiting ${seconds}s)${
-      exhausted ? " — you have now waited longer than your patience allows. You are done waiting; abandon or find another way." : ""
-    }`;
+    return {
+      text: `(no new mail after waiting ${seconds}s)${
+        exhausted ? " — you have now waited longer than your patience allows. You are done waiting; abandon or find another way." : ""
+      }`,
+    };
   }
 
   // every email format is different — render each message and let the brain see it
+  const canReadFiles = opts.brain.readsFiles ?? false;
   const parts: string[] = [`${msgs.length} new message(s):`];
   for (let i = 0; i < Math.min(msgs.length, 2); i++) {
     const m = msgs[i];
     const codes = extractCodes(m.subject, m.text);
-    const shot = `${opts.sessionDir}/shots/email-${i + 1}.png`;
-    const shotPath = opts.driver.emailScreenshot(m.html ?? m.text, shot);
     parts.push(`mail #${i + 1} from ${m.from} — subject: ${m.subject}`);
     if (codes.length) parts.push(`  candidate codes (may include junk): ${codes.join(", ")}`);
-    const saved = await shotPath;
-    if (saved) {
-      parts.push(`  SCREENSHOT of this email: ${saved} — READ IT to find the real code visually`);
+    // The body text always ships. A screenshot is a bonus, never the only copy:
+    // one email rendered as a blank PNG and the persona, told to read it, saw
+    // nothing and walked out of a login flow that was working fine.
+    const body = stripInvisible(m.text).replace(/\s+/g, " ").trim();
+    if (body) parts.push(`  body: ${trim(body, 600)}`);
+    if (canReadFiles) {
+      const shot = `${opts.sessionDir}/shots/email-${i + 1}.png`;
+      const saved = await opts.driver.emailScreenshot(m.html ?? m.text, shot);
+      if (saved) {
+        parts.push(`  screenshot of this email (may be blank — trust the text above if so): ${saved}`);
+      }
     }
   }
-  return parts.join("\n");
+  const mail = parts.join("\n");
+  return { text: mail, mail };
 }
 
 /**

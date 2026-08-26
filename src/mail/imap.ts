@@ -118,16 +118,24 @@ export class ImapProvider implements MailProvider {
       for (const folder of folders) {
         const lock = await c.getMailboxLock(folder);
         try {
+          // {uid:true} matters: search() returns SEQUENCE numbers by default,
+          // and every read below addresses messages by UID. Mixing the two
+          // fetched one message's envelope and another's body — which showed
+          // up as mail that arrived with a subject but no content at all.
           const uids =
-            (await c.search({ header: { to: box.address }, since })) || [];
+            (await c.search({ header: { to: box.address }, since }, { uid: true })) || [];
           for (const uid of uids) {
             const key = `${folder}:${uid}`;
             if (this.seenFor(box).has(key)) continue;
-            const msg = await c.fetchOne(String(uid), {
-              bodyStructure: true,
-              envelope: true,
-              internalDate: true,
-            });
+            const msg = await c.fetchOne(
+              String(uid),
+              {
+                bodyStructure: true,
+                envelope: true,
+                internalDate: true,
+              },
+              { uid: true },
+            );
             if (!msg || typeof msg === "boolean") continue;
             const env = msg.envelope;
 
@@ -218,11 +226,17 @@ export class ImapProvider implements MailProvider {
           // Gmail with auto-expunge off ignores \Deleted/EXPUNGE — moving to
           // Bin is the only true delete. Loop: each pass consumes one batch.
           for (let round = 0; round < 25; round++) {
+            // {uid:true} is load-bearing: the moves below are UID-addressed, so
+            // searching by sequence number would delete whichever unrelated mail
+            // happened to sit at that position in a shared catch-all inbox.
             const uids =
-              (await c.search({
-                header: { to: box.address },
-                since,
-              })) || [];
+              (await c.search(
+                {
+                  header: { to: box.address },
+                  since,
+                },
+                { uid: true },
+              )) || [];
             if (uids.length === 0) break;
             const before = uids[0];
             for (const uid of uids) {
@@ -236,11 +250,15 @@ export class ImapProvider implements MailProvider {
             }
             // detect accounts where the server refuses to purge
             // (e.g. Gmail with auto-expunge off) instead of looping forever
+            // same units as `before` above, or the stall check never matches
             const recheck =
-              (await c.search({
-                header: { to: box.address },
-                since,
-              })) || [];
+              (await c.search(
+                {
+                  header: { to: box.address },
+                  since,
+                },
+                { uid: true },
+              )) || [];
             if (recheck.length > 0 && recheck[0] === before) {
               console.warn(
                 `\n  ⚠ mailbox destroy incomplete: server refused to purge (Gmail "Auto-Expunge off"?). ` +

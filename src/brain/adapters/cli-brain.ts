@@ -51,6 +51,8 @@ export interface CliBrainOptions {
   effort?: string;
   /** Directory outside the working dir the CLI may read (session screenshots) */
   allowDir?: string;
+  /** Whether persona prompts may point this brain at screenshot files */
+  readsFiles?: boolean;
   /**
    * Extra environment for this brain (e.g. opencode's OPENCODE_CONFIG).
    * Merged over a sanitized allowlist — children never inherit the full
@@ -100,6 +102,7 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
     model: opts.model,
     effort: opts.effort,
     allowDir: opts.allowDir,
+    readsFiles: opts.readsFiles ?? false,
     /** Free-form question. Used for verification and by the expert panel. */
     async ask(prompt: string): Promise<string> {
       return runOnce(prompt);

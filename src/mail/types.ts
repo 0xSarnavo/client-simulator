@@ -25,6 +25,23 @@ export interface MailProvider {
 
 const CODE_RE = /\b\d(?:[ \t]?\d){3,7}\b/g;
 
+/**
+ * Zero-width and bidi characters used as email preheader padding.
+ *
+ * Senders pad the preview line with hundreds of these. Left in, they burn the
+ * whole body excerpt a persona gets to see — one login mail spent its first 700
+ * characters on padding, so the excerpt held nothing but invisible filler.
+ */
+const INVISIBLE_RE = /[​-‏⁠­﻿]/g;
+
+/** Drop invisible padding so an excerpt is made of characters a human could read */
+export function stripInvisible(s: string): string {
+  return s.replace(INVISIBLE_RE, "");
+}
+
+/** Alphanumeric one-time codes, which only count when a cue word introduces them */
+const ALNUM_CODE_RE = /(?:code|token|otp|passcode)\b[^A-Za-z0-9]{0,20}([A-Za-z0-9]{6,48})\b/gi;
+
 /** Strip HTML down to visible text (styles/scripts removed, tags dropped, entities decoded) */
 export function htmlToText(html: string): string {
   return html
@@ -49,7 +66,7 @@ export function extractCodes(...parts: string[]): string[] {
   // would otherwise yield the wrong code "4839" — worse than finding none.
   const unfolded = parts.slice(1).join("\n").replace(/=\r?\n/g, "");
   const body = htmlToText(unfolded);
-  const haystack = `${subject}\n${body}`;
+  const haystack = stripInvisible(`${subject}\n${body}`);
 
   const raw = [...new Set(
     (haystack.match(CODE_RE) ?? []).map((c) => c.replace(/\s+/g, "")),
@@ -69,7 +86,23 @@ export function extractCodes(...parts: string[]): string[] {
     return { code, rank, idx };
   });
   scored.sort((a, b) => a.rank - b.rank || a.idx - b.idx);
-  return scored.map((s) => s.code).slice(0, 5);
+  const numeric = scored.map((s) => s.code);
+
+  // Not every one-time code is digits — supermemory's login mail sends a 32-char
+  // mixed-case token, which a digits-only search reported as "no code found".
+  // Only cue-introduced tokens qualify, so ordinary body words stay out.
+  const alnum: string[] = [];
+  for (const m of haystack.matchAll(ALNUM_CODE_RE)) {
+    const token = m[1];
+    // A cue word alone is not enough: "…or the code. supermemory inc." would
+    // offer "supermemory". Real codes carry a digit, mixed case, or all-caps —
+    // a plain lowercase word does not, and is still readable in the body text.
+    const codeLike = /\d/.test(token) || token !== token.toLowerCase();
+    if (!codeLike || numeric.includes(token) || alnum.includes(token)) continue;
+    alnum.push(token);
+  }
+
+  return [...numeric, ...alnum].slice(0, 5);
 }
 
 /** Pull links out of a message (magic links, verify buttons) */

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { stuckPattern } from "./session.js";
+import { mergeInbox, stuckPattern } from "./session.js";
 import type { StepEvent } from "./types.js";
 
 /** Build a step trail from shorthand: "click:e1", "scroll:down", ... */
@@ -19,6 +19,32 @@ function trail(...actions: string[]): StepEvent[] {
     } as StepEvent;
   });
 }
+
+describe("mergeInbox", () => {
+  const CODE = "mail #1 from auth@site.com — subject: your code\n  candidate codes: 483920";
+
+  it("shows fresh mail as-is", () => {
+    assert.equal(mergeInbox({ text: CODE, mail: CODE }), CODE);
+  });
+
+  it("passes an empty inbox through when nothing ever arrived", () => {
+    assert.equal(mergeInbox({ text: "(no new mail after waiting 15s)" }), "(no new mail after waiting 15s)");
+  });
+
+  it("keeps mail that already landed visible on a later empty check", () => {
+    // the provider reports only NEW messages — without this the code disappears
+    // and a working magic-link flow reads as broken
+    const merged = mergeInbox({ text: "(no new mail after waiting 15s)" }, CODE);
+    assert.match(merged, /483920/);
+    assert.match(merged, /still sitting in your inbox/);
+  });
+
+  it("drops the give-up nudge once something is in the inbox", () => {
+    const exhausted = "(no new mail after waiting 15s) — you have now waited longer than your patience allows. You are done waiting; abandon or find another way.";
+    assert.ok(!/abandon/.test(mergeInbox({ text: exhausted }, CODE)));
+    assert.match(mergeInbox({ text: exhausted }), /abandon/);
+  });
+});
 
 describe("stuckPattern", () => {
   it("does not fire before there is enough evidence", () => {

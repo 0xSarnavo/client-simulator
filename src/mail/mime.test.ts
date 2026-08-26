@@ -137,6 +137,29 @@ describe("extractCodes", () => {
   it("returns nothing when there is no code", () => {
     assert.deepEqual(extractCodes("Hello", "Thanks for signing up! Nothing numeric here."), []);
   });
+
+  it("finds an alphanumeric one-time code, which digits-only search missed", () => {
+    // supermemory's login mail sends a 32-char mixed-case token, not digits
+    const codes = extractCodes(
+      "Logging in",
+      "Prefer a code? Use this one instead: one-time code vGmbUhHuBxGgJKVjAnVPApFhACUymESr",
+    );
+    assert.ok(codes.includes("vGmbUhHuBxGgJKVjAnVPApFhACUymESr"), `got ${codes.join()}`);
+  });
+
+  it("does not treat ordinary prose as an alphanumeric code", () => {
+    assert.deepEqual(extractCodes("Welcome", "We coded this ourselves. Nothing here matters."), []);
+    // a lowercase word right after a cue is a sentence, not a code
+    assert.deepEqual(
+      extractCodes("Welcome", "Nothing happens without the code. supermemory inc."),
+      [],
+    );
+  });
+
+  it("sees through zero-width preheader padding", () => {
+    const padded = `Sign in​‌‍‎‏`.repeat(50) + " your code is 483920";
+    assert.ok(extractCodes("Sign in", padded).includes("483920"));
+  });
 });
 
 describe("extractLinks", () => {
