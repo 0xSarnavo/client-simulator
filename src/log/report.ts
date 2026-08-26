@@ -1,4 +1,34 @@
 import type { Persona, StepEvent, ExitReason } from "../types.js";
+import type { BrainUsage } from "../brain/adapters/cli-brain.js";
+
+/** Wall-clock the journey took, from the timestamps already on every event. */
+export function journeySeconds(events: StepEvent[]): number | null {
+  const stamps = events
+    .map((e) => Date.parse(e.timestamp))
+    .filter((t) => Number.isFinite(t));
+  if (stamps.length < 2) return null;
+  return Math.round((Math.max(...stamps) - Math.min(...stamps)) / 1000);
+}
+
+function durationSuffix(events: StepEvent[]): string {
+  const total = journeySeconds(events);
+  if (total === null) return "";
+  const avg = Math.round(total / Math.max(events.length - 1, 1));
+  return ` over ${fmtDuration(total)} (~${avg}s per step)`;
+}
+
+export function fmtTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+export function fmtDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return s ? `${m}m ${s}s` : `${m}m`;
+}
 
 export function generateReport(opts: {
   persona: Persona;
@@ -6,8 +36,10 @@ export function generateReport(opts: {
   brain: string;
   events: StepEvent[];
   exit: ExitReason;
+  /** Token/cost totals for the run, when the brain reported them */
+  usage?: BrainUsage;
 }): string {
-  const { persona, url, brain, events, exit } = opts;
+  const { persona, url, brain, events, exit, usage } = opts;
   const lines: string[] = [];
 
   const verdict = exitVerdict(exit);
@@ -17,9 +49,39 @@ export function generateReport(opts: {
   lines.push(`- **Persona:** ${persona.name} (${persona.temperature})`);
   lines.push(`- **Brain:** ${brain}`);
   lines.push(`- **Date:** ${new Date().toISOString()}`);
-  lines.push(`- **Steps taken:** ${events.length}`);
+  lines.push(`- **Steps taken:** ${events.length}${durationSuffix(events)}`);
   lines.push(`- **Verdict:** ${verdict}`);
+  if (usage?.reported) {
+    const totalIn = usage.inputTokens + usage.cacheReadTokens + usage.cacheCreateTokens;
+    lines.push(
+      `- **Cost:** ${usage.calls} AI calls · ${fmtTokens(totalIn)} in ` +
+        `(${fmtTokens(usage.cacheReadTokens)} cached) · ${fmtTokens(usage.outputTokens)} out · ` +
+        `$${usage.costUsd.toFixed(2)}`,
+    );
+  }
   lines.push("");
+
+  // Which pages the journey actually reached, and what it took to get there —
+  // a page that takes eight steps to find is a finding in itself.
+  const firstSeen = new Map<string, StepEvent>();
+  for (const e of events) {
+    const key = e.url.split("#")[0];
+    if (!firstSeen.has(key)) firstSeen.set(key, e);
+  }
+  if (firstSeen.size > 0) {
+    const start = Math.min(...events.map((e) => Date.parse(e.timestamp)).filter(Number.isFinite));
+    lines.push(`## Pages Reached (${firstSeen.size})`);
+    lines.push("");
+    lines.push(`| Page | First reached | Steps in | Time in |`);
+    lines.push(`|------|---------------|----------|---------|`);
+    for (const [pageUrl, e] of firstSeen) {
+      const secs = Number.isFinite(start) ? Math.round((Date.parse(e.timestamp) - start) / 1000) : null;
+      lines.push(
+        `| ${shorten(pageUrl)} | step ${e.n} | ${e.n} | ${secs === null ? "—" : fmtDuration(secs)} |`,
+      );
+    }
+    lines.push("");
+  }
 
   if (exit.kind === "completed") {
     lines.push(`## Outcome`);
@@ -47,11 +109,16 @@ export function generateReport(opts: {
 
   lines.push(`## Journey Timeline`);
   lines.push("");
-  lines.push(`| # | URL | Thought | Emotion | Confusion | Action |`);
-  lines.push(`|---|-----|---------|---------|-----------|--------|`);
+  lines.push(`| # | At | URL | Thought | Emotion | Confusion | Action |`);
+  lines.push(`|---|----|-----|---------|---------|-----------|--------|`);
+  const start = Math.min(...events.map((e) => Date.parse(e.timestamp)).filter(Number.isFinite));
   for (const e of events) {
+    // seconds since the journey began — shows where a persona stalled
+    const at = Number.isFinite(Date.parse(e.timestamp)) && Number.isFinite(start)
+      ? `+${Math.round((Date.parse(e.timestamp) - start) / 1000)}s`
+      : "—";
     lines.push(
-      `| ${e.n} | ${shorten(e.url)} | ${cell(e.decision.thought)} | ${cell(
+      `| ${e.n} | ${at} | ${shorten(e.url)} | ${cell(e.decision.thought)} | ${cell(
         e.decision.emotion,
       )} | ${e.decision.confusion}/10 | ${actionLabel(e.decision.action)} |`,
     );
