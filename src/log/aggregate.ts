@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ExitReason, StepEvent } from "../types.js";
 import { ExitReasonSchema, StepEventSchema } from "../types.js";
 import { PERSONAS } from "../persona/presets.js";
+import { fmtDuration, journeySeconds } from "./report.js";
 export { siteSlug } from "../runs.js";
 
 export interface SessionMeta {
@@ -118,8 +119,8 @@ export function generateAggregate(dirs: string[]): string {
   // per-session table
   lines.push(`## Session Detail`);
   lines.push("");
-  lines.push(`| Session | Persona | Verdict | Steps | Drop Point | Reason |`);
-  lines.push(`|---------|---------|---------|-------|------------|--------|`);
+  lines.push(`| Session | Persona | Verdict | Steps | Time | Drop Point | Reason |`);
+  lines.push(`|---------|---------|---------|-------|------|------------|--------|`);
   for (const s of [...sessions].sort((a, b) => a.dir.localeCompare(b.dir))) {
     const last = s.events.at(-1);
     const drop =
@@ -133,7 +134,7 @@ export function generateAggregate(dirs: string[]): string {
           ? s.meta.exit.summary
           : s.meta.exit.detail;
     lines.push(
-      `| \`${dirName(s.dir)}\` | ${PERSONAS[s.meta.personaId]?.name ?? s.meta.personaId} | ${verdictIcon(s.meta.exit)} | ${s.events.length} | ${drop} | ${cell(reason)} |`,
+      `| \`${dirName(s.dir)}\` | ${PERSONAS[s.meta.personaId]?.name ?? s.meta.personaId} | ${verdictIcon(s.meta.exit)} | ${s.events.length} | ${journeySeconds(s.events) === null ? "—" : fmtDuration(journeySeconds(s.events)!)} | ${drop} | ${cell(reason)} |`,
     );
   }
   lines.push("");
