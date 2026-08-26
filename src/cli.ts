@@ -429,7 +429,7 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
 
       writeFileSync(
         `${sessionDir}/report.md`,
-        generateReport({ persona, url, brain: describeRun(common), events, exit }),
+        generateReport({ persona, url, brain: describeRun(common), events, exit, usage: (brain as { usage?: never }).usage }),
       );
       writeFileSync(
         `${sessionDir}/meta.json`,
@@ -440,6 +440,7 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
             brain: brain.name,
             model: common.model ?? null,
             effort: common.effort ?? null,
+            usage: (brain as { usage?: unknown }).usage ?? null,
             exit,
             viewport: common.mobile ? "mobile" : "desktop",
           },
