@@ -187,21 +187,36 @@ export class BrowserDriver {
     if (this.videoSaved || !this.videoDir) return;
     this.videoSaved = true;
 
+    // The journey is whatever page it ENDED on: popups are followed, and when
+    // one closes the stack reverts, so this.page is always the live journey.
+    // Size is not a proxy for this — a heavy landing page left open in tab one
+    // outweighs the signup tab the persona actually finished in.
+    const journeyVideo = this.page?.video?.();
+
     await this.context?.close().catch(() => {}); // recordings finalize on context close
     if (!existsSync(this.videoDir)) return;
 
-    const clips = readdirSync(this.videoDir)
-      .filter((f) => f.endsWith(".webm"))
-      .map((f) => `${this.videoDir}/${f}`)
-      .map((file) => ({ file, size: statSync(file).size }));
+    let saved = false;
+    if (journeyVideo) {
+      saved = await journeyVideo
+        .saveAs(path)
+        .then(() => true)
+        .catch(() => false);
+    }
 
-    const main = chooseRecording(clips);
-    if (main) {
-      try {
-        renameSync(main.file, path);
-      } catch {
-        // cross-device or racing writer — leave the raw file rather than lose it
-        return;
+    if (!saved) {
+      // no page video (crashed before first paint) — keep the longest clip we have
+      const clips = readdirSync(this.videoDir)
+        .filter((f) => f.endsWith(".webm"))
+        .map((f) => `${this.videoDir}/${f}`)
+        .map((file) => ({ file, size: statSync(file).size }));
+      const main = chooseRecording(clips);
+      if (main) {
+        try {
+          renameSync(main.file, path);
+        } catch {
+          return; // cross-device or racing writer — leave the raw file rather than lose it
+        }
       }
     }
     rmSync(this.videoDir, { recursive: true, force: true });
