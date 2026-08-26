@@ -31,6 +31,8 @@ export function createClaudeBrain(role: BrainRole = "persona") {
   const disallowed = role === "expert" ? EXPERT_DISALLOWED : PERSONA_DISALLOWED;
   return makeCliBrain({
     name: "claude",
+    // --add-dir opts the session dir in, so Read reaches the screenshots
+    readsFiles: true,
     command: "claude",
     // no --resume: each call is self-contained and the prompt carries the
     // journey, so context cannot grow without bound across a run

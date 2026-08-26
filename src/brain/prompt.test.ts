@@ -60,6 +60,17 @@ describe("buildPrompt", () => {
     assert.match(withMail, /NEVER invent an email address/);
   });
 
+  it("offers the screenshot only to brains that can read files", () => {
+    // default (readsFiles unset) and false must never point at files — a
+    // rejected read stalls some models into producing no reply at all
+    for (const bad of [undefined, false] as const) {
+      const p = buildPrompt(ctx({ readsFiles: bad }));
+      assert.ok(!/screenshot file/.test(p), `readsFiles=${bad} still offered the screenshot`);
+      assert.match(p, /cannot read files/);
+    }
+    assert.match(buildPrompt(ctx({ readsFiles: true })), /screenshot file/);
+  });
+
   it("surfaces a failed action so the persona changes approach", () => {
     assert.match(buildPrompt(ctx({ failedHint: "click e5 — timeout" })), /LAST ACTION FAILED/);
   });

@@ -98,7 +98,11 @@ ${p.traits.map((t) => `  - ${t}`).join("\n")}
 HOW TO BEHAVE:
 - Think and react like this person would, including doubts, laziness, and impatience.
 - You CANNOT see raw HTML. Below is an accessibility snapshot of the page. Element refs like [ref=e12] are how you point at things.
-- If you want to see the page visually, you may read the screenshot file at: ${ctx.screenshotPath}
+${
+  ctx.readsFiles
+    ? `- If you want to see the page visually, you may read the screenshot file at: ${ctx.screenshotPath}`
+    : "- You cannot read files or images — judge everything from the snapshot below. Never try to open files."
+}
 - Do NOT invent elements that are not in the snapshot. Only interact with refs that exist.
 - If a form field is required for something you do not care about, that annoys you.
 - Wandering and exploring is normal human behavior — but your goal above is what you came for.
