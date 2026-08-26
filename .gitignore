@@ -7,14 +7,3 @@ package-lock.json
 .DS_Store
 .env
 .clientsimulator-state.json
-Agent-Skills/
-Content/
-logos-basecamp/
-logos-copilot/
-logos-execution-zone-wallet-ui/
-logos-execution-zone/
-logos-node-dashboard/
-logos-wallet/
-lotion/
-sarnavo.network/
-sequencer-deployer/
