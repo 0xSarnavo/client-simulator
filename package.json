@@ -7,6 +7,12 @@
     "client-simulator": "./dist/cli.js"
   },
   "main": "dist/cli.js",
+  "files": [
+    "dist",
+    "!dist/**/*.test.js",
+    "README.md",
+    "AGENTS.md"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/cli.js",

@@ -7,7 +7,7 @@ import { MAX_DECIDE_ATTEMPTS } from "./brain/adapters/cli-brain.js";
 import { PERSONAS } from "./persona/presets.js";
 import { getPersonaRegistry, newPersonaFile } from "./persona/load.js";
 import { generatePersonas } from "./persona/generate.js";
-import { runSession } from "./session.js";
+import { MAX_VERIFICATIONS, runSession } from "./session.js";
 import { generateReport } from "./log/report.js";
 import { generateAggregate, loadSessions } from "./log/aggregate.js";
 import { dirLabel, findSessionDirs, sessionPath, siteSlug } from "./runs.js";
@@ -374,7 +374,7 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
   // attempt is its own CLI call. Completion checks (max 2 per session) do not
   // retry. Experts are stage 3 and counted there.
   const steps = personaIds.reduce((n, pid) => n + registry.personas[pid].patience_steps, 0);
-  const checks = personaIds.length * 2;
+  const checks = personaIds.length * MAX_VERIFICATIONS;
   console.log(
     `\n  ${personaIds.length} prospect(s) queued: ${personaIds.join(", ")} | ${describeRun(common)}`,
   );
