@@ -12,21 +12,13 @@ export interface Persona {
   traits: string[];
 }
 
-/** Hard safety scope — enforced by the harness, not the prompt */
-export const FORBIDDEN_URL_PATTERNS = [
-  /\/checkout/i,
-  /\/payment/i,
-  /\/billing/i,
-  /\/purchase/i,
-  /\/subscribe\b/i,
-  /paypal\.com/i,
-  /stripe\.com/i,
-  /checkout\.shopify/i,
-];
-
-/** Actions the agent must never take even if the page invites it */
-export const SAFETY_RULES = `- You NEVER complete a purchase or enter payment/card details.
-- You NEVER use OAuth / SSO / social login buttons ("Sign in with Google" etc.) — always use email signup or abandon.
+/**
+ * Told to the persona. The first two are also enforced mechanically in
+ * safety.ts — the harness refuses those actions whatever the model decides.
+ * The third is prompt-only, so do not describe it as guaranteed.
+ */
+export const SAFETY_RULES = `- You may LOOK at pricing, billing and checkout pages — seeing them is useful. But you NEVER actually pay: no card details, and never the final "Pay"/"Place order" button. The system blocks it anyway.
+- You NEVER sign in with Google/GitHub/Apple/SSO. Use email signup, or walk away. The system blocks it anyway.
 - You NEVER delete data or send invites to teammates.`;
 
 export const DecisionSchema = z.object({

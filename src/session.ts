@@ -9,8 +9,8 @@ import type { BrowserDriver } from "./browser/driver.js";
 import type { Brain } from "./types.js";
 import { appendFileSync } from "node:fs";
 import { buildVerificationPrompt } from "./brain/prompt.js";
+import { blockedAction } from "./safety.js";
 import { parseVerdict } from "./brain/adapters/cli-brain.js";
-import { FORBIDDEN_URL_PATTERNS } from "./types.js";
 import type { MailProvider, Mailbox, MailMessage } from "./mail/types.js";
 import { extractCodes } from "./mail/types.js";
 
@@ -65,15 +65,6 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
     }
 
     const screenshotPath = await driver.screenshotPath(step);
-
-    // HARD SAFETY SCOPE: never follow the journey into payment/billing territory
-    if (FORBIDDEN_URL_PATTERNS.some((p) => p.test(snap.url))) {
-      exit = {
-        kind: "guardrail",
-        detail: `Safety scope reached at step ${step}: journey entered a payment/billing page (${snap.url}). The agent never pays — this is recorded as the wall it hit.`,
-      };
-      break;
-    }
 
     const ctx: BrainContext = {
       persona,
@@ -197,6 +188,16 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
         ...decision,
         action: { ...decision.action, text: opts.mail.box.address },
       };
+    }
+
+    // SAFETY BOUNDARY: looking at a checkout page is fine, acting on it is not.
+    const refusal = blockedAction(decision.action, snap.ariaYaml);
+    if (refusal) {
+      event.note = [event.note, `blocked: ${refusal}`].filter(Boolean).join(" | ");
+      failedHint = `The system ${refusal}. Find another way or walk out — do not retry it.`;
+      console.log(`  🛑 blocked: ${trim(refusal, 90)}`);
+      commit();
+      continue;
     }
 
     try {

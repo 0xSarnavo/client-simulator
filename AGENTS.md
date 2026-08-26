@@ -226,15 +226,47 @@ traits:                      # free-text personality lines — these steer the L
 
 Traits are the personality lever — write them like a character brief, first-person reactions the LLM should mimic. Invalid files are listed with reasons by `client-simulator personas` and skipped (never crash runs).
 
-## Safety (non-negotiable)
+## Safety
 
-Mechanically enforced by the harness:
-- Never enters payment/billing flows (URL wall terminates the session)
-- The persona's email address is always the assigned mailbox — invented addresses are overridden
+Personas may go anywhere, including pricing, billing docs and checkout pages —
+reaching the wall is the finding. What is blocked is the *action*, not the page.
 
-Enforced via persona prompt rules (strict, but not mechanical):
-- Never uses OAuth/SSO/social login
+Enforced in `src/safety.ts`, before every action in `src/session.ts`. **This is
+a best-effort label match, not a guarantee.** It refuses the common English
+payment-commit and third-party-auth controls; a label it has not seen — an
+unusual phrasing, another language, a control with no accessible name — will
+pass. Do not point this at a live commerce site and assume it cannot buy.
+
+- **Payment.** Card-number fields (by label), anything passing a Luhn check, and
+  commit controls: "Pay", "Pay now", "Buy it now", "Place your order",
+  "Complete your order", "Confirm & pay", PayPal/Apple Pay/Google Pay, "Donate",
+  and a bare "Subscribe" (Stripe Checkout's literal commit button in
+  subscription mode). "Upgrade" and "See pricing" pass — they open a checkout
+  the persona should be able to reach and describe.
+- **Third-party auth.** "Sign in with X", bare provider-icon buttons whose whole
+  label is "Google", "Use SSO", "Enterprise login", "Log in with your work
+  account". "Continue with email" is not SSO; neither is "Share via Slack".
+- **Email is always the assigned mailbox** — invented addresses are overridden.
+
+Structural defences do more of the real work than the regexes: every session runs
+in a fresh `browser.newContext()` (no saved cards, no logged-in provider), `type`
+uses `fill()` and never presses Enter (no implicit submit), and the snapshot is
+main-frame only, so iframed Stripe/Adyen/Braintree card fields cannot be targeted
+at all.
+
+A refusal does not end the session. The persona is told why, and either routes
+around it or walks out — which is the behaviour you want recorded.
+
+Enforced via persona prompt only (strict, but not mechanical):
 - Never deletes data or invites teammates
+
+### Why this replaced the URL blocklist
+
+The previous guard matched URL substrings and was wrong in both directions. It
+killed two `deep-evaluator` sessions for opening `docs.modelcode.ai/support/billing-and-credits`
+and `platform.experientiallabs.ai/docs/billing` — help articles, not payment
+pages — while a checkout at a path without those words walked straight past it.
+Judging the action instead of the address fixes both failure modes.
 
 ## Output layout
 
