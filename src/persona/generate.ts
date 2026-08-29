@@ -1,5 +1,6 @@
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { stringify } from "yaml";
 import { z } from "zod";
 import type { Brain } from "../types.js";
@@ -41,9 +42,10 @@ export interface GeneratedPersona extends z.infer<typeof GeneratedPersonaSchema>
 export async function scrapeSiteContext(url: string): Promise<string> {
   const { BrowserDriver } = await import("../browser/driver.js");
   const driver = new BrowserDriver();
+  // a fixed /tmp path was both predictable (another local user can pre-plant it)
+  // and never cleaned up — mkdtemp gives a private 0700 dir we can delete after
+  const tmp = mkdtempSync(join(tmpdir(), "clientsim-scrape-"));
   try {
-    const tmp = `/tmp/opencode/clientsim-scrape-${Date.now()}`;
-    mkdirSync(tmp, { recursive: true });
     await driver.launch({ headless: true, shotsDir: tmp });
     await driver.goto(url);
     const snap = await driver.snapshot();
@@ -55,6 +57,7 @@ export async function scrapeSiteContext(url: string): Promise<string> {
     return "";
   } finally {
     await driver.close();
+    rmSync(tmp, { recursive: true, force: true });
   }
 }
 

@@ -195,14 +195,23 @@ interface CommonArgs {
 
 function parseCommon(argv: string[]): CommonArgs {
   const args: CommonArgs = { headless: false, mobile: false };
+  /** Value flags: a trailing `--persona` used to throw a raw TypeError here. */
+  const value = (i: number, flag: string): string => {
+    const v = argv[i];
+    if (v === undefined || v.startsWith("--")) {
+      console.error(`${flag} needs a value. See \`client-simulator --help\`.`);
+      process.exit(1);
+    }
+    return v;
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--personas" || a === "--persona")
-      args.personas = argv[++i].split(",").map((s) => s.trim());
-    else if (a === "--runs") args.runs = parseInt(argv[++i], 10);
-    else if (a === "--brain") args.brain = argv[++i];
-    else if (a === "--model") args.model = argv[++i];
-    else if (a === "--effort") args.effort = argv[++i];
+      args.personas = value(++i, a).split(",").map((s) => s.trim()).filter(Boolean);
+    else if (a === "--runs") args.runs = parseInt(value(++i, a), 10);
+    else if (a === "--brain") args.brain = value(++i, a);
+    else if (a === "--model") args.model = value(++i, a);
+    else if (a === "--effort") args.effort = value(++i, a);
     else if (a === "--headless") args.headless = true;
     else if (a === "--mobile") args.mobile = true;
     else if (a === "--plan") args.plan = true;
@@ -369,6 +378,15 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
 
   const dirs: string[] = [];
   const mail = setupMail();
+  if (!mail) {
+    // with a mailbox the harness forces every typed address to the ephemeral
+    // one; without it, whatever the brain invents is what real signup forms get
+    console.warn(
+      `\n  ⚠ no mailbox configured — personas will invent email addresses and may sign real\n` +
+        `    inboxes up to ${siteSlug(url)}. Set CLIENTSIM_IMAP_* (see README) to give each run a\n` +
+        `    throwaway address the harness enforces, and to let personas read verification mail.`,
+    );
+  }
 
   // A step is usually one call, but decide() retries a malformed reply and each
   // attempt is its own CLI call. Completion checks (max 2 per session) do not
@@ -878,8 +896,10 @@ async function wizard() {
       break;
     }
     case "doctor": {
-      const choice = await resolveBrainChoice({}, "Which AI should I health-check?");
-      await runDoctor(choice.brain, true);
+      const choice = await resolveBrainChoice({}, "Which AI should I health-check?", {
+        requireInstalled: false,
+      });
+      if (!(await runDoctor(choice.brain, true))) process.exitCode = 1;
       break;
     }
   }
@@ -945,8 +965,9 @@ async function main() {
       const choice = await resolveBrainChoice(
         { brain: common.brain, model: common.model, effort: common.effort },
         "Which AI should I health-check?",
+        { requireInstalled: false },
       );
-      await runDoctor(choice.brain, rest.includes("--force"));
+      if (!(await runDoctor(choice.brain, rest.includes("--force")))) process.exitCode = 1;
       break;
     }
     case "personas": {

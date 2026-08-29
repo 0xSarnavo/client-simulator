@@ -156,7 +156,7 @@ Tools are restricted by role (`src/brain/adapters/claude.ts`):
 | Role | Tools | Why |
 |---|---|---|
 | `persona` | `Read` only | It must judge the page from the snapshot and its own screenshot — not shell out or fetch the URL directly |
-| `expert` | `Read`, `Bash`, `WebFetch`, search | Expert prompts explicitly invite reading screenshots and curling the page for raw HTML |
+| `expert` | `Read`, `WebFetch`, search | Experts read screenshots and fetch the page for raw HTML. No shell: their input is a transcript quoting the site under review, so it is attacker-influenced too, and `WebFetch` is the narrow tool for the one thing the prompts actually need |
 
 Unused tool schemas cost roughly 5k tokens on every single call, so this is a
 substantial saving as well as a correctness boundary.
@@ -232,21 +232,39 @@ Personas may go anywhere, including pricing, billing docs and checkout pages —
 reaching the wall is the finding. What is blocked is the *action*, not the page.
 
 Enforced in `src/safety.ts`, before every action in `src/session.ts`. **This is
-a best-effort label match, not a guarantee.** It refuses the common English
-payment-commit and third-party-auth controls; a label it has not seen — an
-unusual phrasing, another language, a control with no accessible name — will
-pass. Do not point this at a live commerce site and assume it cannot buy.
+a best-effort label match, not a guarantee.** A label it has not seen — an
+unusual phrasing, a language not listed below, a control with no accessible name
+— will pass. Do not point this at a live commerce site and assume it cannot buy.
+
+Every label is read several ways before it is judged, because the page chooses
+its own spelling: accents folded, Latin lookalikes mapped in ("Googlе" with a
+Cyrillic е), letter-spacing collapsed ("G o o g l e"). Every reading is checked
+and any dangerous one blocks — injected text can add a label, never mask one.
+That last part matters: a page can print "[ref=e12]" in its own copy, and taking
+the first matching snapshot line let one hidden div relabel every control on the
+page as "Continue".
 
 - **Payment.** Card-number fields (by label), anything passing a Luhn check, and
   commit controls: "Pay", "Pay now", "Buy it now", "Place your order",
   "Complete your order", "Confirm & pay", PayPal/Apple Pay/Google Pay, "Donate",
   and a bare "Subscribe" (Stripe Checkout's literal commit button in
   subscription mode). "Upgrade" and "See pricing" pass — they open a checkout
-  the persona should be able to reach and describe.
+  the persona should be able to reach and describe. Beyond English: es/pt/fr/de/
+  it/nl commit phrasings ("Pagar", "Payer", "Kostenpflichtig bestellen",
+  "Finalizar compra", "Valider la commande"), plus ru/ja/zh/ko ("Оплатить",
+  "今すぐ購入", "立即购买", "결제하기"). Bare verbs count only as the WHOLE label,
+  so "Métodos de pago" stays readable.
 - **Third-party auth.** "Sign in with X", bare provider-icon buttons whose whole
   label is "Google", "Use SSO", "Enterprise login", "Log in with your work
-  account". "Continue with email" is not SSO; neither is "Share via Slack".
+  account", and the same in other languages, verb-first or verb-last
+  ("Continuar con Google", "Mit Google anmelden", "Googleでログイン").
+  "Continue with email" is not SSO; neither is "Share via Slack".
 - **Email is always the assigned mailbox** — invented addresses are overridden.
+
+Page text reaches a model as data, never as instruction: the snapshot goes into
+the persona and verification prompts with backticks stripped, so a page cannot
+close the ```yaml fence around it, and the session transcript reaches the expert
+panel inside an explicit untrusted-data block.
 
 Structural defences do more of the real work than the regexes: every session runs
 in a fresh `browser.newContext()` (no saved cards, no logged-in provider), `type`

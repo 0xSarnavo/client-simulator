@@ -43,12 +43,19 @@ export function stripInvisible(s: string): string {
 const ALNUM_CODE_RE = /(?:code|token|otp|passcode)\b[^A-Za-z0-9]{0,20}([A-Za-z0-9]{6,48})\b/gi;
 
 /** Strip HTML down to visible text (styles/scripts removed, tags dropped, entities decoded) */
+/**
+ * Bound on a single tag. `<[^>]+>` on unclosed "<" characters is quadratic —
+ * 256KB of "<a " (a mail body at the fetch cap) burned 33 seconds of the event
+ * loop inside a session step. Real tags are far shorter than this.
+ */
+const TAG = /<[^>]{1,400}>/g;
+
 export function htmlToText(html: string): string {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<[^>]+>/g, " ")
+    .replace(TAG, " ")
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")

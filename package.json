@@ -17,7 +17,9 @@
     "build": "tsc",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsc && node --test \"dist/**/*.test.js\""
+    "test": "tsc && node --test \"dist/**/*.test.js\"",
+    "site": "node website/server.mjs",
+    "site:build": "node website/generate.mjs"
   },
   "keywords": [
     "user-testing",
