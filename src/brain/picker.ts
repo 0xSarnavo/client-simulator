@@ -21,8 +21,41 @@ export interface BrainChoice {
 }
 
 const DEFAULT_BRAIN = "claude";
+
 const USE_DEFAULT = " default";
 const USE_CUSTOM = " custom";
+
+/**
+ * A brain named by flag was never checked for existence, so `--brain codex` on a
+ * machine without Codex launched a browser, minted a mailbox, and only then
+ * failed — one dead CLI call per retry, 60s of backoff, and a session recorded
+ * as a guardrail exit. The same `--version` probe the picker menu uses decides
+ * it up front.
+ */
+/**
+ * Codex takes the effort as `-c model_reasoning_effort="<value>"`, so a value
+ * carrying a quote or a newline would set unrelated config keys. Every real
+ * level is a bare word; anything else is a typo or an injection attempt.
+ */
+function assertEffortShape(effort: string | undefined): void {
+  if (effort !== undefined && !/^[a-z0-9_-]{1,20}$/i.test(effort)) {
+    throw new Error(
+      `Invalid --effort "${effort}". Use a single word like low, medium or high.`,
+    );
+  }
+}
+
+async function assertInstalled(brain: string): Promise<void> {
+  const available = await detectBrains();
+  const found = available.find((a) => a.spec.id === brain);
+  if (found && !found.installed) {
+    const others = available.filter((a) => a.installed).map((a) => a.spec.id);
+    throw new Error(
+      `Brain "${brain}" is not installed (no \`${found.spec.command} --version\` in PATH).` +
+        (others.length ? ` Installed: ${others.join(", ")} — pass --brain <one of those>.` : " Install Claude Code, Codex, or opencode first."),
+    );
+  }
+}
 
 /** Transient status line while we shell out to the CLIs. */
 async function withStatus<T>(message: string, work: () => Promise<T>): Promise<T> {
@@ -92,9 +125,15 @@ async function pickEffort(brainId: string): Promise<string | undefined> {
 export async function resolveBrainChoice(
   given: { brain?: string; model?: string; effort?: string },
   purpose = "Which AI plays the client?",
+  /** doctor sets this: reporting a missing CLI is the whole point of that command */
+  opts: { requireInstalled?: boolean } = {},
 ): Promise<BrainChoice> {
+  const requireInstalled = opts.requireInstalled ?? true;
+  assertEffortShape(given.effort);
   if (!isInteractive()) {
-    return { brain: given.brain ?? DEFAULT_BRAIN, model: given.model, effort: given.effort };
+    const brain = given.brain ?? DEFAULT_BRAIN;
+    if (requireInstalled) await assertInstalled(brain);
+    return { brain, model: given.model, effort: given.effort };
   }
 
   let brain = given.brain;
@@ -126,6 +165,7 @@ export async function resolveBrainChoice(
       `Unknown brain "${brain}". Available: ${BRAIN_SPECS.map((s) => s.id).join(", ")}`,
     );
   }
+  if (requireInstalled) await assertInstalled(brain);
 
   const model = given.model ?? (await pickModel(brain));
   const effort = given.effort ?? (await pickEffort(brain));

@@ -14,7 +14,7 @@ Apply the installed no-ai-slop skill (AI-writing tells and fixes) if available.
 Persona: ${ctx.persona.name} (${ctx.persona.temperature})
 Outcome: ${exitSummary(ctx.exit)}
 
-Journey trail (screenshot paths included — you may read them to see the actual copy; you may also curl the URL for full text):
+Journey trail (screenshot paths included — you may read them to see the actual copy, and fetch the page URL for its full text):
 ${trailSummary(ctx.events)}
 
 AI-slop tells to hunt for:
@@ -75,7 +75,7 @@ Apply the installed seo-audit skill (on-page SEO checklist) if available.
 Persona: ${ctx.persona.name}
 Outcome: ${exitSummary(ctx.exit)}
 
-Journey trail (screenshot paths included; you may also curl ${ctx.url} to inspect raw HTML for title/meta/heading/alt/structure):
+Journey trail (screenshot paths included; you may also fetch ${ctx.url} to inspect its HTML for title/meta/heading/alt/structure):
 ${trailSummary(ctx.events)}
 
 Check the on-page basics only (this is a single-page audit, not a crawl):

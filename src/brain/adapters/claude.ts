@@ -17,15 +17,21 @@ interface ClaudeJsonOutput {
  *
  * A persona keeps only Read, so it can look at its own screenshot but cannot
  * shell out, fetch the URL directly, or read the project it is running against.
- * Experts keep the tools their prompts actually invite (reading screenshots and
- * curling the page for raw HTML).
+ *
+ * Experts read a transcript quoting the site under review, so their input is
+ * attacker-influenced too — they lose the shell for the same reason. WebFetch
+ * stays: their prompts need the page's raw text, and fetching a URL is the
+ * narrow tool for that, where Bash was a general-purpose one.
  */
 const PERSONA_DISALLOWED = [
   "Bash", "BashOutput", "KillShell", "Write", "Edit", "NotebookEdit",
   "WebFetch", "WebSearch", "Task", "Glob", "Grep", "TodoWrite", "SlashCommand",
 ];
 
-const EXPERT_DISALLOWED = ["Write", "Edit", "NotebookEdit", "Task", "TodoWrite", "SlashCommand"];
+const EXPERT_DISALLOWED = [
+  "Bash", "BashOutput", "KillShell",
+  "Write", "Edit", "NotebookEdit", "Task", "TodoWrite", "SlashCommand",
+];
 
 export function createClaudeBrain(role: BrainRole = "persona") {
   const disallowed = role === "expert" ? EXPERT_DISALLOWED : PERSONA_DISALLOWED;
