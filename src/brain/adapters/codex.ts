@@ -7,7 +7,8 @@ import type { BrainRole } from "../roles.js";
  *
  * Personas ingest hostile page/email content, so they run under the read-only
  * sandbox (no writes outside it, matching the claude persona's tool policy).
- * Experts keep the CLI default so their prompts can shell out and curl.
+ * Experts read a transcript quoting that same content, so they get the same
+ * sandbox — they only ever return text, and never write through the CLI.
  */
 export function createCodexBrain(role: BrainRole = "persona") {
   return makeCliBrain({
@@ -16,7 +17,8 @@ export function createCodexBrain(role: BrainRole = "persona") {
     args: (prompt, { model, effort }) => [
       "exec",
       "--skip-git-repo-check",
-      ...(role === "persona" ? ["--sandbox", "read-only"] : []),
+      "--sandbox",
+      "read-only",
       ...(model ? ["-m", model] : []),
       ...(effort ? ["-c", `model_reasoning_effort="${effort}"`] : []),
       prompt,

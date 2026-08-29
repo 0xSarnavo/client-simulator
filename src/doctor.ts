@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { execa } from "execa";
+import { detectBrains } from "./brain/catalog.js";
 
 const STATE_FILE = ".clientsimulator-state.json";
 const STATE_MAX_AGE_MS = 7 * 24 * 3600_000; // re-verify weekly
@@ -19,7 +19,11 @@ interface StateFile {
 function loadState(): StateFile | null {
   if (!existsSync(STATE_FILE)) return null;
   try {
-    return JSON.parse(readFileSync(STATE_FILE, "utf8"));
+    const raw = JSON.parse(readFileSync(STATE_FILE, "utf8"));
+    // the file is edited by hand and written by older versions — a wrong shape
+    // used to reach stateIsFresh() and crash the command with a stack trace
+    if (!raw || typeof raw !== "object" || !Array.isArray(raw.results)) return null;
+    return raw as StateFile;
   } catch {
     return null;
   }
@@ -28,6 +32,7 @@ function loadState(): StateFile | null {
 function stateIsFresh(state: StateFile): boolean {
   return (
     state.results.length > 0 &&
+    state.results.every((r) => r && typeof r === "object") &&
     Date.now() - new Date(state.lastCheck).getTime() < STATE_MAX_AGE_MS &&
     state.results.every((r) => r.ok)
   );
@@ -71,19 +76,22 @@ async function checkChromium(): Promise<DoctorResult> {
   }
 }
 
-async function checkCli(cmd: string, versionFlag = "--version"): Promise<DoctorResult> {
-  try {
-    const r = await execa(cmd, [versionFlag], { timeout: 15_000, reject: false });
-    const v = (r.stdout || "").split("\n")[0].slice(0, 40);
-    return { name: `${cmd} CLI`, ok: !r.failed, detail: v || "installed", live: false };
-  } catch {
-    return {
-      name: `${cmd} CLI`,
-      ok: false,
-      detail: "not found in PATH",
+/**
+ * A run needs *an* AI CLI, not every AI CLI — so all of them are probed but
+ * they collapse into a single pass/fail. Missing ones are reported, not failed.
+ */
+async function checkBrainClis(): Promise<{ result: DoctorResult; installed: string[] }> {
+  const available = await detectBrains();
+  const installed = available.filter((a) => a.installed).map((a) => a.spec.id);
+  return {
+    result: {
+      name: "AI CLI (any one)",
+      ok: installed.length > 0,
+      detail: available.map((a) => `${a.spec.id}: ${a.detail}`).join(", "),
       live: false,
-    };
-  }
+    },
+    installed,
+  };
 }
 
 /** Live brain test: one tiny real call through the adapter path */
@@ -183,21 +191,21 @@ export async function runDoctor(brainName = "claude", force = false): Promise<bo
   results.push(await checkNode());
   results.push(await checkChromium());
 
-  const claude = await checkCli("claude");
-  const opencode = await checkCli("opencode");
-  results.push(claude, opencode);
+  const { result: clis, installed } = await checkBrainClis();
+  results.push(clis);
 
-  if (!claude.ok && !opencode.ok) {
-    console.error(`\n  ✗ No AI CLI found. Install Claude Code or opencode first.`);
-    results.forEach((r) =>
-      console.log(`    ${r.ok ? "✓" : "✗"} ${r.name}: ${r.detail}`),
-    );
-    process.exit(1);
+  if (installed.length === 0) {
+    results.forEach((r) => console.log(`  ${r.ok ? "✓" : "✗"} ${r.name}: ${r.detail}`));
+    console.error(`\n  ✗ No AI CLI found. Install Claude Code, Codex, or opencode first.\n`);
+    return false;
   }
 
-  // live checks — use the brain the user actually has
-  const preferred = claude.ok ? "claude" : "opencode";
-  if (preferred !== brainName) brainName = preferred;
+  // live check — only ever against a brain the user actually has
+  if (!installed.includes(brainName)) {
+    const fallback = installed[0];
+    console.log(`  ! ${brainName} is not installed — health-checking ${fallback} instead`);
+    brainName = fallback;
+  }
 
   results.push(await checkBrainLive(brainName));
   results.push(await checkMailLive());

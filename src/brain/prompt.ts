@@ -27,6 +27,20 @@ Choose ONE action:
 
 const DETAIL_STEPS = 5;
 
+/**
+ * The snapshot goes inside a ```yaml fence, and its contents are the page's own
+ * text. A page that prints ``` in its copy closes the fence early, and whatever
+ * it writes next reads as harness instruction rather than page content — enough
+ * to talk a persona into declaring a broken signup complete, and enough to fool
+ * the verification step that exists to catch exactly that claim.
+ *
+ * Backticks carry no meaning for a persona reading a page, so they are simply
+ * not passed through.
+ */
+export function fenceSafe(pageText: string): string {
+  return pageText.replace(/`/g, "'");
+}
+
 function renderHistory(history: StepEvent[]): string {
   if (history.length === 0) return "";
   const older = history.slice(0, -DETAIL_STEPS);
@@ -121,7 +135,7 @@ ${historyBlock ? `\n${historyBlock}` : "\nYou have just arrived at this website.
 
 CURRENT PAGE SNAPSHOT (accessibility tree):
 \`\`\`yaml
-${pruneSnapshot(ctx.ariaYaml)}
+${fenceSafe(pruneSnapshot(ctx.ariaYaml))}
 \`\`\`
 
 ${SCHEMA_INSTRUCTIONS}`;
@@ -157,7 +171,7 @@ YOUR GOAL WAS: "${ctx.goal}"
 
 CURRENT PAGE SNAPSHOT:
 \`\`\`yaml
-${ctx.ariaYaml}
+${fenceSafe(ctx.ariaYaml)}
 \`\`\`
 
 Is the goal ACTUALLY achieved based on this page? Be strict: signing up means seeing confirmation/dashboard/access — not just submitting a form.

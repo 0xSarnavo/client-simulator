@@ -7,25 +7,34 @@ import type { BrainRole } from "../roles.js";
 /**
  * Personas ingest hostile page/email content, so their tool surface is denied
  * outright via a config file (verified: opencode honours OPENCODE_CONFIG
- * permission denies in non-interactive `run`). Experts keep the default
- * profile — their prompts legitimately invite shell and web access.
+ * permission denies in non-interactive `run`). Experts read a transcript
+ * quoting that same content, so they lose the shell too — they keep webfetch,
+ * which their prompts need to pull the page's raw text.
  */
-const PERSONA_DENY_CONFIG = {
-  $schema: "https://opencode.ai/config.json",
-  permission: { edit: "deny", bash: "deny", webfetch: "deny" },
-};
+const DENY_CONFIG = {
+  persona: {
+    $schema: "https://opencode.ai/config.json",
+    permission: { edit: "deny", bash: "deny", webfetch: "deny" },
+  },
+  expert: {
+    $schema: "https://opencode.ai/config.json",
+    permission: { edit: "deny", bash: "deny" },
+  },
+} as const;
 
-let denyConfigPath: string | null = null;
+const configPaths: Partial<Record<BrainRole, string>> = {};
 
-function writePersonaDenyConfig(): string {
-  // one shared config per process (unique 0700 dir: another local user must
-  // not be able to pre-plant this file)
-  if (!denyConfigPath) {
+function writeDenyConfig(role: BrainRole): string {
+  // one shared config per role per process (unique 0700 dir: another local user
+  // must not be able to pre-plant this file)
+  let path = configPaths[role];
+  if (!path) {
     const dir = mkdtempSync(join(tmpdir(), "clientsim-oc-"));
-    denyConfigPath = join(dir, "persona-permissions.json");
-    writeFileSync(denyConfigPath, JSON.stringify(PERSONA_DENY_CONFIG));
+    path = join(dir, `${role}-permissions.json`);
+    writeFileSync(path, JSON.stringify(DENY_CONFIG[role] ?? DENY_CONFIG.persona));
+    configPaths[role] = path;
   }
-  return denyConfigPath;
+  return path;
 }
 
 export function createOpencodeBrain(role: BrainRole = "persona") {
@@ -46,7 +55,7 @@ export function createOpencodeBrain(role: BrainRole = "persona") {
       prompt,
     ],
     // deny config is only honoured through the environment, not a CLI flag
-    ...(role === "persona" ? { env: { OPENCODE_CONFIG: writePersonaDenyConfig() } } : {}),
+    env: { OPENCODE_CONFIG: writeDenyConfig(role) },
     extractText: (stdout) => stdout,
     timeoutMs: 300_000,
   });

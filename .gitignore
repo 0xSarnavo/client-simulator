@@ -7,3 +7,6 @@ package-lock.json
 .DS_Store
 .env
 .clientsimulator-state.json
+
+# local only — the marketing site deploys straight to Railway
+website/

@@ -231,7 +231,7 @@ npx skills add phuryn/pm-skills@user-personas -g -y                     # person
 2. The persona brain (your AI CLI) sees it and answers in strict JSON: thought, emotion, confusion, next action
 3. The harness executes the action and logs everything
 4. Guardrails keep sessions honest: stuck-loop detection, failure retries, patience caps, and a verification call that challenges any "I'm done" claim
-5. Safety is enforced on actions, not pages: clients may read pricing and reach a checkout, but the harness refuses card entry, common payment-commit buttons and third-party sign-in (best-effort label matching — see AGENTS.md)
+5. Safety is enforced on actions, not pages: clients may read pricing and reach a checkout, but the harness refuses card entry, payment-commit buttons and third-party sign-in in ten languages (best-effort label matching — see AGENTS.md)
 
 ---
 
