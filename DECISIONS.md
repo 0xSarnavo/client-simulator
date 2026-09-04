@@ -23,6 +23,22 @@ mechanical work. If you cannot fill in **Why**, there is no entry to write.
 
 ---
 
+## 2026-09-04 — One malformed persona no longer discards the generated set
+
+**Decided:** persona generation validates per element: bad entries are dropped
+with a printed reason, and only an all-bad reply fails.
+
+**Why:** the first multi-model sweep caught it in minutes. haiku answered
+`tech_comfort: "medium-high"` on 4 of 10 personas and `z.array(...).parse`
+threw the whole set away — the run silently fell back to 3 built-ins, which is
+exactly the wrong queue for a sweep comparing models on identical prospects.
+Same failure class as the expert scorecard (`24de073`): weaker models bend
+enums, and the harness's job is to keep the valid majority.
+
+**Files:** `src/persona/generate.ts`
+
+**Ref:** `6322ef9`
+
 ## 2026-09-04 — The brief's scrape doubles as a bot-wall scout
 
 **Decided:** `botWallMarker()` checks the scraped page text for known walls —
