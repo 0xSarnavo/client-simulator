@@ -1,5 +1,5 @@
 import type { Expert } from "./types.js";
-import { exitSummary, trailSummary } from "./types.js";
+import { exitSummary, trailSummary, siteContext } from "./types.js";
 
 export const copywriterExpert: Expert = {
   id: "copywriter",
@@ -10,6 +10,7 @@ export const copywriterExpert: Expert = {
     const prompt = `You are a senior conversion copywriter. A simulated prospect went through this website. Your job: rewrite the copy that confused, annoyed, or lost them.
 Apply the installed landing-page-copywriter and ux-writing skills (conversion copy + microcopy frameworks) if available.
 
+${siteContext(ctx)}
 Persona: ${ctx.persona.name} (${ctx.persona.temperature}, tech comfort: ${ctx.persona.tech_comfort})
 Goal: ${ctx.persona.goal}
 Outcome: ${exitSummary(ctx.exit)}

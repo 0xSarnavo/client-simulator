@@ -11,7 +11,7 @@ const scratch = mkdtempSync(join(tmpdir(), "clientsim-personas-"));
 const cwd = process.cwd();
 mkdirSync(join(scratch, "personas"), { recursive: true });
 process.chdir(scratch);
-const { getPersonaRegistry } = await import("./load.js");
+const { getPersonaRegistry, siteOwnPersonas } = await import("./load.js");
 
 const write = (name: string, body: string) =>
   writeFileSync(join(scratch, "personas", name), body);
@@ -76,5 +76,36 @@ describe("getPersonaRegistry", () => {
       getPersonaRegistry().errors.filter((e) => /notes|README/.test(e.file)),
       [],
     );
+  });
+});
+
+describe("siteOwnPersonas", () => {
+  const URL = "https://acme.example";
+  const SITE_DIR = join(scratch, "runs", "acme.example", "personas");
+
+  const PERSONA = (name: string) =>
+    `name: "${name}"\ntemperature: warm\ngoal: "buy the thing"\n`;
+
+  it("returns only the set built for that site", () => {
+    // a machine-local global persona must not count as this site's work
+    write("global-only.yaml", PERSONA("Global Gwen"));
+    mkdirSync(SITE_DIR, { recursive: true });
+    writeFileSync(join(SITE_DIR, "site-built.yaml"), PERSONA("Site Sam"));
+
+    const own = siteOwnPersonas(URL);
+    assert.deepEqual(Object.keys(own), ["site-built"]);
+    assert.ok(!("global-only" in own), "a global persona counted as this site's");
+    assert.ok(!("cold" in own), "a built-in preset counted as this site's");
+  });
+
+  it("is empty for a site that has never been generated for", () => {
+    // this is what decides whether generation runs at all — if a global
+    // directory made it non-empty, a new site would never get its own set
+    assert.deepEqual(siteOwnPersonas("https://never-seen.example"), {});
+  });
+
+  it("still exposes global personas through the full registry", () => {
+    // scoping siteOwnPersonas must not make hand-written personas unusable
+    assert.ok("global-only" in getPersonaRegistry(URL).personas);
   });
 });

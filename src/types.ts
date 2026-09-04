@@ -63,6 +63,7 @@ export const StepEventSchema = z.object({
   screenshot: z.string().optional(),
   decision: DecisionSchema,
   note: z.string().optional(),
+  scrollY: z.number().optional(),
 });
 
 export const ExitReasonSchema = z.discriminatedUnion("kind", [
@@ -84,6 +85,12 @@ export type StepEvent = {
   decision: Decision;
   /** e.g. why a "complete" claim was rejected by verification */
   note?: string;
+  /**
+   * Scroll offset when this decision was made. Lets stuckPattern tell a persona
+   * working its way down a long page from one wedged at the bottom still
+   * scrolling: same action, but only the second one repeats a position.
+   */
+  scrollY?: number;
 };
 
 export type ExitReason =
@@ -107,6 +114,18 @@ export interface BrainContext {
   emailResult?: string;
   /** False (default) when this brain cannot read files — prompts then omit screenshot pointers */
   readsFiles?: boolean;
+  /**
+   * What this visitor already knew before clicking through — rationed by
+   * temperature in `arrivalFor()`: cold gets nothing, warm gets the arrival
+   * paragraph, hot also gets what it does, costs, and how signup works.
+   */
+  arrival?: string;
+  /**
+   * ref -> where it sits relative to the viewport, from `driver.snapshot()`.
+   * `buildPrompt` uses it to show only what a person could see. Empty means
+   * unmeasured, and the whole tree is shown as before.
+   */
+  visibility?: Record<string, { hidden: boolean; belowFold: boolean; onScreen: boolean }>;
 }
 
 export interface Brain {

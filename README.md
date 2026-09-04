@@ -8,9 +8,9 @@ Each client is a persona with a personality and a goal. It browses your site in 
 git clone https://github.com/0xSarnavo/client-simulator
 cd client-simulator && npm install && npm run build
 npx playwright install chromium
-node dist/cli.js doctor        # verifies your setup (2 min, once)
-node dist/cli.js               # guided wizard — pick everything from menus
-node dist/cli.js visit <url> --persona cold
+node dist/cli.js --doctor      # verifies your setup (2 min, once)
+node dist/cli.js               # guided flow — pick everything from menus
+node dist/cli.js <url>         # or just point it at a site
 ```
 
 Runs on AI CLI subscriptions (Claude Code, opencode, Codex). No API keys. No per-run fees.
@@ -52,17 +52,41 @@ Wanted answered: "Is your email verification service actually working?"
 
 ---
 
-## Commands
+## One command
 
 ```bash
-client-simulator                    # guided wizard: command, url, brain, model, effort
-client-simulator visit <url>        # test it (interactive: pick how many of each persona)
-client-simulator report             # aggregate all sessions into one funnel report
-client-simulator fix runs/<dir>     # expert panel reviews a session -> FIXES.md
-client-simulator all <url>          # visit -> report -> fix in one shot
-client-simulator doctor             # verify your environment
-client-simulator personas           # list personas, or scaffold/generate new ones
-client-simulator mailtest           # test the OTP mailbox lifecycle
+client-simulator <url>
+```
+
+That's the tool. It reads the page, builds prospects who fit the product, sends
+them through, aggregates the funnel, and runs the expert panel — asking only what
+it can't work out. Run it bare for a guided flow.
+
+Five stages, in order. `--stop <stage>` ends after any of them:
+
+| Stage | Does | Writes |
+|---|---|---|
+| `site` | Reads the landing page | `runs/<site>/SITE.md` |
+| `personas` | Builds prospects for this product | `runs/<site>/personas/` |
+| `visit` | Sends them, one session each | `session.jsonl`, `report.md`, `video.webm` |
+| `report` | Aggregates the funnel | `runs/<site>/AGGREGATE.md` |
+| `fix` | Expert panel | `FIXES.md` per session |
+
+```bash
+client-simulator acme.com --yes            # the lot, asking nothing
+client-simulator acme.com --stop personas  # just read it and build prospects
+client-simulator acme.com --stop visit     # send them, skip the analysis
+```
+
+On their own:
+
+```bash
+client-simulator --report            # aggregate past sessions
+client-simulator --fix runs/<dir>    # expert panel on a past session
+client-simulator --doctor            # verify your environment
+client-simulator --list-personas     # every persona you have
+client-simulator --new-persona "Budget Bianca"
+client-simulator --mailtest          # test the OTP mailbox lifecycle
 ```
 
 Useful flags:
@@ -74,7 +98,9 @@ Useful flags:
 | `--brain opencode` | which AI CLI to use — prompted if omitted |
 | `--model opus` | pin the model — prompted if omitted |
 | `--effort high` | reasoning depth — prompted if omitted |
-| `--plan` | re-run the first-visit site read on a known site |
+| `--stop <stage>` | end after site / personas / visit / report / fix |
+| `--yes` | never prompt; take every default |
+| `--plan` | re-read the site and rebuild its personas |
 | `--mobile` | phone viewport (390×844, touch) |
 | `--headless` | no browser window |
 | `--force` | redo a stage even if up to date |
@@ -88,9 +114,9 @@ Stages are gated: `report` needs sessions, `fix` needs a report. Re-running with
 
 ## First visit to a site
 
-The first time you point it at a site, it reads the landing page and asks how you
-want to test — so you're choosing personas with the page in front of you instead
-of guessing:
+The first time you point it at a site it reads the landing page and writes the
+brief, before anyone is sent in — so you're picking prospects with the page in
+front of you instead of guessing:
 
 ```text
   New site — yoursite.com
@@ -98,31 +124,47 @@ of guessing:
   Product   Team knowledge base with AI-powered search
   For       Ops and support leads at mid-size companies
   Main CTA  "Start free trial" → email signup, no card required
+  Signup    Email or Google SSO, at /signup
+  Pricing   Free tier; paid from $12/seat/mo
 
-  How do you want to test it?
-  ❯ built-in personas       cold / warm / hot — start now
-    generate for this site  personas fitted to this page
-    both                    generate a set, then also pick built-in counts
+  brief: runs/yoursite.com/SITE.md
+
+  How many personas should I build for this site? (2-10, Enter for 10, 0 to skip)
 ```
 
-Pick *generate* and you get a persona set built for that page, printed as a
-coverage summary, then a checklist of which ones actually run. Later visits to the
-same site skip straight to persona counts; `--plan` brings it back.
+Then a coverage summary of the set it built, and a checklist of which ones
+actually run. `SITE.md` also records the walls it found (SSO, payment, email
+verification) and what a first-timer would trip on.
+
+This happens whatever flags you passed — including `--persona`. Reading the page
+is how prospects get built, and how warm and hot prospects know what they came
+for. Later visits reuse both; `--plan` rebuilds them.
 
 ## Personas
 
-Three built in: **cold** (skeptical first-timer), **warm** (evaluating alternatives), **hot** (ready to buy).
+Three built in — and what separates them is how much they already know when they
+arrive, because that's most of what makes people behave differently:
 
-Three ways to add more:
+| | Who | Arrives knowing |
+|---|---|---|
+| **cold** | skeptical first-timer | nothing at all |
+| **warm** | evaluating alternatives | what they came looking for |
+| **hot** | ready to buy | that, plus the price and how to sign up |
+
+Cold is deliberately kept in the dark. Tell a cold visitor what your product does
+and they stop being a first-time visitor — and whatever they then fail to notice
+stops being evidence about your page.
+
+Two ways to add more:
 
 ```bash
-client-simulator personas --new "Budget Bianca"   # scaffold a YAML, edit it
-client-simulator personas generate --site <url> --count 6
-client-simulator personas generate --from "who buys this" --count 6
+client-simulator --new-persona "Budget Bianca"   # answers a few questions, writes the YAML
+client-simulator <url> --stop personas           # AI-build a set for that site
 ```
 
-The generator scrapes your site and builds a set spanning everyone who actually
-lands on it, not variations on one ideal buyer:
+Generated sets land in `runs/<site>/personas/` and apply to that site only. The
+generator reads your page and builds a set spanning everyone who actually lands
+on it, not variations on one ideal buyer:
 
 | Tier | Who |
 |---|---|
@@ -132,11 +174,11 @@ lands on it, not variations on one ideal buyer:
 
 It also spreads across circumstances that decide whether onboarding works at all:
 low tech comfort, keyboard-only and screen-reader users, skim readers, the
-privacy-sensitive, and the price-first. `--from` is optional when you pass
-`--site` — the audience is inferred from the page.
+privacy-sensitive, and the price-first. The audience is inferred from the page.
 
-`personas/` is created on demand; any `.yaml` in it auto-loads. Only `name`,
-`temperature`, and `goal` are required.
+Any `.yaml` in `personas/` auto-loads and applies everywhere; anything in
+`runs/<site>/personas/` applies to that site only and wins on a name collision.
+Only `name`, `temperature`, and `goal` are required.
 
 ---
 
@@ -181,7 +223,7 @@ CLIENTSIM_IMAP_PASS="xxxx xxxx xxxx xxxx"   # Gmail app password
 CLIENTSIM_MAIL_DOMAIN="yourdomain.com"
 ```
 
-Test it: `client-simulator mailtest`. Without email config, clients treat "check your inbox" walls as drop-offs, which is still useful data.
+Test it: `client-simulator --mailtest`. Without email config, clients treat "check your inbox" walls as drop-offs, which is still useful data.
 
 ---
 

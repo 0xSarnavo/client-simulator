@@ -21,6 +21,16 @@ export interface SessionOptions {
   driver: BrowserDriver;
   sessionDir: string;
   mail?: { provider: MailProvider; box: Mailbox };
+  /** Arrival context from the site brief — see BrainContext.arrival */
+  arrival?: string;
+  /** Wall-clock ceiling in minutes (default 20). Waiting on mail and `wait` actions do not count. */
+  timeBudgetMinutes?: number;
+  /**
+   * Set when several sessions share one terminal: prefixes the lines that
+   * carry no persona name, and suppresses the transient spinner writes —
+   * clearLine races between concurrent sessions and shreds the output.
+   */
+  tag?: string;
 }
 
 export interface SessionResult {
@@ -29,6 +39,12 @@ export interface SessionResult {
 }
 
 const MAX_CONSECUTIVE_FAILURES = 4;
+/**
+ * Scroll steps a session may take beyond its patience budget before it is cut
+ * off regardless. Sized for a very long landing page (~21 screens at 600px), so
+ * a persona can reach the bottom of anything real, and no further.
+ */
+const MAX_FREE_SCROLLS = 30;
 /** Completion claims re-checked per session. Each is one un-retried call. */
 export const MAX_VERIFICATIONS = 2;
 
@@ -36,6 +52,7 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
   const { driver, persona, brain } = opts;
   const jsonlPath = `${opts.sessionDir}/session.jsonl`;
   const events: StepEvent[] = [];
+  const tag = opts.tag ? `[${opts.tag}] ` : "";
 
   console.log(`\n  ${persona.name} (${persona.temperature}) is visiting ${opts.url}`);
   console.log(`  brain: ${brain.name} | patience: ${persona.patience_steps} steps\n`);
@@ -51,10 +68,41 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
   let arrivedMail: string | undefined;
   let emailWaitSeconds = 0;
   if (opts.mail) {
-    console.log(`  mailbox: ${opts.mail.box.address}`);
+    console.log(`  ${tag}mailbox: ${opts.mail.box.address}`);
   }
 
-  for (let step = 1; step <= persona.patience_steps; step++) {
+  /**
+   * Patience counts decisions, not travel.
+   *
+   * The snapshot now shows one viewport instead of the whole document, so
+   * reaching the bottom of a 21-screen landing page takes ~14 scrolls. Charging
+   * a step for each would exhaust a 12-step persona halfway down and file it as
+   * a drop-off the site did not cause. Looking around is not the thing patience
+   * measures — a person who scrolls a page has not yet given up on it.
+   */
+  let spent = 0;
+  /** Hard ceiling so a persona that only ever scrolls still terminates. */
+  const maxSteps = persona.patience_steps + MAX_FREE_SCROLLS;
+
+  /**
+   * Wall-clock ceiling, so one session cannot run forever. patience_steps stays
+   * the in-character "I give up" limit; this is infrastructure. Time spent
+   * waiting — mail polls, deliberate `wait` actions — is excluded, the same
+   * logic that made scrolling free: slow mail is not the site's fault.
+   */
+  const budgetMs = (opts.timeBudgetMinutes ?? 20) * 60_000;
+  const startedAt = Date.now();
+  let waivedMs = 0;
+
+  for (let step = 1; spent < persona.patience_steps && step <= maxSteps; step++) {
+    const elapsedMs = Date.now() - startedAt - waivedMs;
+    if (elapsedMs > budgetMs) {
+      exit = {
+        kind: "guardrail",
+        detail: `Time budget exhausted at step ${step}: ${Math.round(elapsedMs / 60_000)}m active (budget ${budgetMs / 60_000}m, ${Math.round(waivedMs / 1000)}s of waiting excluded)`,
+      };
+      break;
+    }
     let snap;
     try {
       snap = await driver.snapshot();
@@ -79,29 +127,35 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
       emailAddress: opts.mail?.box.address,
       emailResult,
       readsFiles: opts.brain.readsFiles ?? false,
+      arrival: opts.arrival,
+      visibility: snap.visibility,
     };
 
     // THINK
-    process.stdout.write(`  [${step}/${persona.patience_steps}] thinking...`);
+    // patience, not step count — scrolls are free, so the raw step number runs
+    // past the budget and printing it read as "[9/8]"
+    if (!opts.tag) process.stdout.write(`  [${spent + 1}/${persona.patience_steps}] thinking...`);
     let decision: Decision;
     try {
       decision = await brain.decide(ctx);
     } catch (e) {
-      console.log(` failed`);
+      console.log(`${tag ? `  ${tag}brain` : ""} failed`);
       exit = {
         kind: "guardrail",
         detail: `Brain "${brain.name}" failed at step ${step}: ${(e as Error).message}`,
       };
       break;
     }
-    if (process.stdout.isTTY) {
-      process.stdout.clearLine(0);
-      process.stdout.cursorTo(0);
-    } else {
-      process.stdout.write("\n");
+    if (!opts.tag) {
+      if (process.stdout.isTTY) {
+        process.stdout.clearLine(0);
+        process.stdout.cursorTo(0);
+      } else {
+        process.stdout.write("\n");
+      }
     }
     console.log(
-      `  [${decision.confusion}/10 confusion] ${persona.name}: "${trim(decision.thought, 100)}"`,
+      `  ${tag}[${spent + 1}/${persona.patience_steps} · ${decision.confusion}/10 confusion] ${persona.name}: "${trim(decision.thought, 100)}"`,
     );
 
     const event: StepEvent = {
@@ -110,7 +164,11 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
       timestamp: new Date().toISOString(),
       screenshot: screenshotPath || undefined,
       decision,
+      scrollY: snap.scrollY,
     };
+
+    // Looking around is not an attempt. Only decisions draw down patience.
+    if (decision.action.type !== "scroll") spent++;
 
     // EXIT DECISIONS — complete requires verification first
     if (decision.action.type === "complete") {
@@ -121,13 +179,13 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
           const note =
             verdict?.note ??
             "verification was inconclusive — do not trust it as done";
-          console.log(`  ✗ goal NOT verified complete: ${trim(note, 120)}`);
+          console.log(`  ${tag}✗ goal NOT verified complete: ${trim(note, 120)}`);
           event.note = `claimed complete but verification said: ${note}`;
           events.push(event);
           appendFileSync(jsonlPath, JSON.stringify(event) + "\n");
           continue; // keep going — the persona was wrong about being done
         }
-        console.log(`  ✓ goal verified complete`);
+        console.log(`  ${tag}✓ goal verified complete`);
       }
       events.push(event);
       appendFileSync(jsonlPath, JSON.stringify(event) + "\n");
@@ -166,10 +224,12 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
     // ACT — check_email is handled by the mail layer, not the browser
     if (decision.action.type === "check_email") {
       const waitSeconds = decision.action.seconds;
+      const pollStart = Date.now();
       const check = await checkInbox(opts, waitSeconds, () => {
         emailWaitSeconds += waitSeconds;
         return emailWaitSeconds > (persona.otp_patience_seconds ?? 180);
       });
+      waivedMs += Date.now() - pollStart;
       if (check.mail) arrivedMail = check.mail;
       emailResult = mergeInbox(check, arrivedMail);
       consecutiveFailures = 0;
@@ -187,7 +247,7 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
     ) {
       event.note = `brain tried to use invented email "${trim(decision.action.text, 60)}" — overridden with the assigned mailbox`;
       console.log(
-        `  ⚠ email override: invented address replaced with ${opts.mail.box.address}`,
+        `  ${tag}⚠ email override: invented address replaced with ${opts.mail.box.address}`,
       );
       decision = {
         ...decision,
@@ -200,13 +260,14 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
     if (refusal) {
       event.note = [event.note, `blocked: ${refusal}`].filter(Boolean).join(" | ");
       failedHint = `The system ${refusal}. Find another way or walk out — do not retry it.`;
-      console.log(`  🛑 blocked: ${trim(refusal, 90)}`);
+      console.log(`  ${tag}🛑 blocked: ${trim(refusal, 90)}`);
       commit();
       continue;
     }
 
     try {
       await driver.act(decision);
+      if (decision.action.type === "wait") waivedMs += decision.action.seconds * 1000;
       consecutiveFailures = 0;
       failedHint = undefined;
     } catch (e) {
@@ -214,7 +275,7 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
       failedHint = `${actionSummary(decision)} — ${trim((e as Error).message, 120)}`;
       // failures were previously invisible to stages 2-3: only the next prompt saw them
       event.note = [event.note, `action failed: ${failedHint}`].filter(Boolean).join(" | ");
-      console.log(`  ⚠ action failed (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${trim(failedHint, 90)}`);
+      console.log(`  ${tag}⚠ action failed (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${trim(failedHint, 90)}`);
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
         commit();
         exit = {
@@ -283,7 +344,8 @@ async function checkInbox(
   }
 
   const deadline = Date.now() + seconds * 1000;
-  process.stdout.write(`  📬 checking inbox (${seconds}s)...`);
+  if (opts.tag) console.log(`  [${opts.tag}] 📬 checking inbox (${seconds}s)...`);
+  else process.stdout.write(`  📬 checking inbox (${seconds}s)...`);
   let msgs: MailMessage[] = [];
   while (Date.now() < deadline) {
     try {
@@ -295,11 +357,13 @@ async function checkInbox(
     if (msgs.length > 0) break;
     await new Promise((r) => setTimeout(r, 3000));
   }
-  if (process.stdout.isTTY) {
-    process.stdout.clearLine(0);
-    process.stdout.cursorTo(0);
-  } else {
-    process.stdout.write("\n");
+  if (!opts.tag) {
+    if (process.stdout.isTTY) {
+      process.stdout.clearLine(0);
+      process.stdout.cursorTo(0);
+    } else {
+      process.stdout.write("\n");
+    }
   }
 
   if (msgs.length === 0) {
@@ -345,7 +409,19 @@ async function checkInbox(
  * needing enough repetitions that ordinary exploration cannot trip it.
  */
 export function stuckPattern(events: StepEvent[]): string | null {
-  const sigs = events.map((e) => JSON.stringify(e.decision.action));
+  /**
+   * A scroll's signature includes where the page was when it happened.
+   *
+   * Since the snapshot became viewport-sized, working down a long page means
+   * scrolling several times in a row, and "same action 3x" would call that a
+   * loop and kill the session. Folding the position in separates the two cases
+   * without a special rule: three scrolls at 0 / 600 / 1200 are three different
+   * signatures, three at the bottom of the page are one repeated.
+   */
+  const sigs = events.map((e) => {
+    const sig = JSON.stringify(e.decision.action);
+    return e.decision.action.type === "scroll" ? `${sig}@${e.scrollY ?? "?"}` : sig;
+  });
   // period -> repetitions required before we call it a loop
   const PATTERNS: [number, number][] = [
     [1, 3], // same action 3x

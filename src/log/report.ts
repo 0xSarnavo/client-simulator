@@ -1,5 +1,5 @@
 import type { Persona, StepEvent, ExitReason } from "../types.js";
-import type { BrainUsage } from "../brain/adapters/cli-brain.js";
+import type { FlowScore } from "../site/flow.js";
 
 /** Wall-clock the journey took, from the timestamps already on every event. */
 export function journeySeconds(events: StepEvent[]): number | null {
@@ -17,12 +17,6 @@ function durationSuffix(events: StepEvent[]): string {
   return ` over ${fmtDuration(total)} (~${avg}s per step)`;
 }
 
-export function fmtTokens(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
-  return `${(n / 1_000_000).toFixed(2)}M`;
-}
-
 export function fmtDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   const m = Math.floor(seconds / 60);
@@ -36,10 +30,10 @@ export function generateReport(opts: {
   brain: string;
   events: StepEvent[];
   exit: ExitReason;
-  /** Token/cost totals for the run, when the brain reported them */
-  usage?: BrainUsage;
+  /** Which flow checkpoints this journey reached, when a flow was defined */
+  flow?: FlowScore;
 }): string {
-  const { persona, url, brain, events, exit, usage } = opts;
+  const { persona, url, brain, events, exit, flow } = opts;
   const lines: string[] = [];
 
   const verdict = exitVerdict(exit);
@@ -51,15 +45,17 @@ export function generateReport(opts: {
   lines.push(`- **Date:** ${new Date().toISOString()}`);
   lines.push(`- **Steps taken:** ${events.length}${durationSuffix(events)}`);
   lines.push(`- **Verdict:** ${verdict}`);
-  if (usage?.reported) {
-    const totalIn = usage.inputTokens + usage.cacheReadTokens + usage.cacheCreateTokens;
-    lines.push(
-      `- **Cost:** ${usage.calls} AI calls · ${fmtTokens(totalIn)} in ` +
-        `(${fmtTokens(usage.cacheReadTokens)} cached) · ${fmtTokens(usage.outputTokens)} out · ` +
-        `$${usage.costUsd.toFixed(2)}`,
-    );
-  }
+  lines.push(`- **Read as:** one simulated visitor — a risk signal, not measured traffic`);
   lines.push("");
+
+  if (flow && flow.length > 0) {
+    lines.push(`## Flow Checkpoints (${flow.filter((c) => c.reached).length}/${flow.length} reached)`);
+    lines.push("");
+    for (const c of flow) {
+      lines.push(`- ${c.reached ? "✅" : "⬜"} ${cell(c.checkpoint)}${c.note ? ` — ${cell(c.note)}` : ""}`);
+    }
+    lines.push("");
+  }
 
   // Which pages the journey actually reached, and what it took to get there —
   // a page that takes eight steps to find is a finding in itself.
@@ -92,9 +88,9 @@ export function generateReport(opts: {
 
   if (exit.kind === "abandoned") {
     const last = events[events.length - 1];
-    lines.push(`## Drop-off`);
+    lines.push(`## Drop-off risk — this prospect walked out`);
     lines.push("");
-    lines.push(`- **Dropped at step:** ${last?.n ?? "?"} (${last?.url ?? url})`);
+    lines.push(`- **Walked out at step:** ${last?.n ?? "?"} (${last?.url ?? url})`);
     lines.push(`- **In their own words:** "${exit.reason}"`);
     lines.push(`- **Wanted answered:** "${exit.question}"`);
     lines.push("");

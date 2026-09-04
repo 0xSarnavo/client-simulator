@@ -1,6 +1,6 @@
 import type { BrainContext, StepEvent } from "../types.js";
 import { SAFETY_RULES } from "../types.js";
-import { pruneSnapshot } from "../browser/prune.js";
+import { pruneSnapshot, splitByViewport } from "../browser/prune.js";
 
 const SCHEMA_INSTRUCTIONS = `Reply with ONLY a single JSON object, no prose before or after, matching exactly this schema:
 
@@ -108,7 +108,17 @@ WHO YOU ARE:
 - Your goal: ${p.goal}
 - Your personality traits:
 ${p.traits.map((t) => `  - ${t}`).join("\n")}
+${
+  ctx.arrival
+    ? `
+WHY YOU CLICKED THROUGH (what you knew before you got here):
+${ctx.arrival}
 
+You have NOT seen this page before. That paragraph is the expectation you arrived
+with — the page either meets it or it does not, and noticing the gap is the point.
+`
+    : ""
+}
 HOW TO BEHAVE:
 - Think and react like this person would, including doubts, laziness, and impatience.
 - You CANNOT see raw HTML. Below is an accessibility snapshot of the page. Element refs like [ref=e12] are how you point at things.
@@ -133,12 +143,35 @@ ${ctx.emailResult ? `\n📬 YOUR INBOX (result of last check):\n${ctx.emailResul
 ${ctx.failedHint ? `\n⚠️ YOUR LAST ACTION FAILED: ${ctx.failedHint}\nThat element may be broken or hidden. Try a DIFFERENT approach — another element, scrolling, going back — or abandon if blocked.` : ""}
 ${historyBlock ? `\n${historyBlock}` : "\nYou have just arrived at this website. This is your first impression."}
 
-CURRENT PAGE SNAPSHOT (accessibility tree):
-\`\`\`yaml
-${fenceSafe(pruneSnapshot(ctx.ariaYaml))}
-\`\`\`
+${renderPage(ctx)}
 
 ${SCHEMA_INSTRUCTIONS}`;
+}
+
+/**
+ * The page as this visitor can see it: the part on screen, then an outline of
+ * what is further down.
+ *
+ * Showing the whole accessibility tree let a persona act on the footer at step 1
+ * without ever scrolling — 776 refs where a person could see 37. Only what is on
+ * screen carries refs, because a ref is a thing you can click, and you cannot
+ * click what you have not scrolled to.
+ */
+function renderPage(ctx: BrainContext): string {
+  const pruned = pruneSnapshot(ctx.ariaYaml);
+  const { visible, below } = splitByViewport(pruned, ctx.visibility ?? {});
+
+  const outline = below.length
+    ? `\nFURTHER DOWN THE PAGE (scroll to reach — you cannot click these yet):\n${below
+        .map((l) => `- ${l}`)
+        .join("\n")}\n`
+    : "";
+
+  return `WHAT YOU CAN SEE RIGHT NOW (the page is scrolled where it is; this is your viewport):
+\`\`\`yaml
+${fenceSafe(visible)}
+\`\`\`
+${outline}`;
 }
 
 /**
