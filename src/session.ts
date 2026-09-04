@@ -256,7 +256,7 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
     }
 
     // SAFETY BOUNDARY: looking at a checkout page is fine, acting on it is not.
-    const refusal = blockedAction(decision.action, snap.ariaYaml);
+    const refusal = blockedAction(decision.action, snap.ariaYaml, snap.url);
     if (refusal) {
       event.note = [event.note, `blocked: ${refusal}`].filter(Boolean).join(" | ");
       failedHint = `The system ${refusal}. Find another way or walk out — do not retry it.`;

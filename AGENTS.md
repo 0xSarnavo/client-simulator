@@ -287,6 +287,14 @@ page as "Continue".
   "Finalizar compra", "Valider la commande"), plus ru/ja/zh/ko ("Оплатить",
   "今すぐ購入", "立即购买", "결제하기"). Bare verbs count only as the WHOLE label,
   so "Métodos de pago" stays readable.
+- **Meeting bookings.** The commit controls of schedulers: "Schedule Event"
+  (Calendly), "Confirm meeting", "Book this slot", "Book now" — and a bare
+  "Confirm"/"Schedule"/"Book" when the URL or page chrome says scheduler
+  (cal.com, Calendly, timezone pickers). "Book a demo" and "Request access"
+  stay clickable: they open the scheduler, and seeing that signup is
+  demo-gated is the finding. Filling the form is looking; only the commit is
+  refused. This guard exists because two sessions put real 20-minute meetings
+  on a real founder's calendar.
 - **Third-party auth.** "Sign in with X", bare provider-icon buttons whose whole
   label is "Google", "Use SSO", "Enterprise login", "Log in with your work
   account", and the same in other languages, verb-first or verb-last
