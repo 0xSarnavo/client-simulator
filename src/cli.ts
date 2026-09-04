@@ -839,43 +839,43 @@ async function fix(dirs: string[], common: CommonArgs, force = false) {
     console.log(
       `\n  Expert panel: ${persona.name} @ ${s.meta.url} (${s.events.length} steps)`,
     );
-    console.log(`  Experts: ${EXPERTS.map((e) => e.id).join(", ")}`);
+    console.log(`  Experts (in parallel): ${EXPERTS.map((e) => e.id).join(", ")}`);
 
-    const sections: string[] = [];
-    for (const expert of EXPERTS) {
-      process.stdout.write(`  [${expert.id}] ${expert.title}...`);
-      // fresh brain per expert — independent verdicts, not a group conversation
-      const expertBrain = getBrain(common.brain ?? "claude", {
-        model: common.model,
-        effort: common.effort,
-        role: "expert",
-        allowDir: s.dir,
-      });
-      const section = await expert.run(
-        {
-          persona,
-          url: s.meta.url,
-          events: s.events,
-          exit: s.meta.exit,
-          viewport: (s.meta as any).viewport,
-          // the panel used to review a journey with the destination missing
-          brief: loadBrief(s.meta.url) ?? undefined,
-        },
-        expertBrain,
-      );
-      if (process.stdout.isTTY) {
-        process.stdout.clearLine(0);
-        process.stdout.cursorTo(0);
-      } else {
-        process.stdout.write("\n");
-      }
-      if (section) {
-        console.log(`  [${expert.id}] done`);
-        sections.push(`## ${expert.title} — ${expert.id}\n\n${section}`);
-      } else {
-        console.log(`  [${expert.id}] skipped`);
-      }
-    }
+    const briefText = loadBrief(s.meta.url) ?? undefined;
+    // the experts are independent — each its own brain, each returns one
+    // section — so they run at once. No spinner: concurrent clearLine races.
+    const results = await Promise.all(
+      EXPERTS.map(async (expert) => {
+        // fresh brain per expert — independent verdicts, not a group conversation
+        const expertBrain = getBrain(common.brain ?? "claude", {
+          model: common.model,
+          effort: common.effort,
+          role: "expert",
+          allowDir: s.dir,
+        });
+        const section = await expert
+          .run(
+            {
+              persona,
+              url: s.meta.url,
+              events: s.events,
+              exit: s.meta.exit,
+              viewport: (s.meta as any).viewport,
+              // the panel used to review a journey with the destination missing
+              brief: briefText,
+            },
+            expertBrain,
+          )
+          .catch((e) => {
+            console.log(`  [${expert.id}] failed: ${(e as Error).message.split("\n")[0]}`);
+            return null;
+          });
+        console.log(`  [${expert.id}] ${section ? "done" : "skipped"}`);
+        return section ? `## ${expert.title} — ${expert.id}\n\n${section}` : null;
+      }),
+    );
+    // keep registry order regardless of which finished first
+    const sections = results.filter((x): x is string => x !== null);
 
     if (sections.length === 0) continue;
 
