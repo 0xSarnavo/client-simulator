@@ -32,6 +32,12 @@ export interface GenerateOptions {
   brain: Brain & { ask?(prompt: string): Promise<string> };
   /** optional target site — scraped to learn what the product is and who it serves */
   site?: string;
+  /** where the YAML lands. Defaults to the global personas/ directory. */
+  outDir?: string;
+  /** page context already scraped by the caller, so a site is not read twice */
+  siteContext?: string;
+  /** the flow under test — persona goals become variations of it */
+  flowContext?: string;
 }
 
 export interface GeneratedPersona extends z.infer<typeof GeneratedPersonaSchema> {
@@ -67,8 +73,8 @@ export async function generatePersonas(
   if (!opts.brain.ask) throw new Error("brain does not support ask()");
   const count = Math.max(2, Math.min(10, opts.count));
 
-  let siteContext = "";
-  if (opts.site) {
+  let siteContext = opts.siteContext ?? "";
+  if (!siteContext && opts.site) {
     console.log(`  scraping ${opts.site} to understand the product...`);
     siteContext = await scrapeSiteContext(opts.site);
     if (siteContext) console.log(`  got ${siteContext.length} chars of page context`);
@@ -82,7 +88,18 @@ ${siteContext || "(no site provided - rely on the description below)"}
 
 WHO THE PRODUCT IS FOR:
 ${opts.description || "(not stated - infer it from the product context above)"}
+${
+  opts.flowContext
+    ? `
+THE FLOW UNDER TEST:
+${opts.flowContext}
 
+Every persona's goal must be a personal variation of this flow — their own
+reason for attempting it, their own COMPLETE condition within it. Edge personas
+may fail or bail early, but they still enter through this flow.
+`
+    : ""
+}
 Generate ${count} DISTINCT personas covering the FULL RANGE of people who actually
 land on this site - not variations on one ideal buyer. Onboarding has to work for
 everyone who shows up, so spread the set across three tiers:
@@ -130,11 +147,12 @@ Reply ONLY with a JSON array:
   if (start === -1 || end === -1) throw new Error("brain reply contained no JSON array");
   const parsed = GeneratedSetSchema.parse(JSON.parse(text.slice(start, end + 1)));
 
-  if (!existsSync(PERSONAS_DIR)) mkdirSync(PERSONAS_DIR, { recursive: true });
+  const outDir = opts.outDir ?? PERSONAS_DIR;
+  if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
 
   const written: GeneratedPersona[] = [];
   for (const p of parsed.slice(0, count)) {
-    const file = resolve(PERSONAS_DIR, `${p.id}.yaml`);
+    const file = resolve(outDir, `${p.id}.yaml`);
     if (existsSync(file)) {
       console.log(`  ! skipped ${p.id}.yaml (already exists)`);
       continue;

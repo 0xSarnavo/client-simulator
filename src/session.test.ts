@@ -3,10 +3,14 @@ import { describe, it } from "node:test";
 import { mergeInbox, stuckPattern } from "./session.js";
 import type { StepEvent } from "./types.js";
 
-/** Build a step trail from shorthand: "click:e1", "scroll:down", ... */
+/**
+ * Build a step trail from shorthand: "click:e1", "scroll:down", and for scrolls
+ * an optional page position, "scroll:down@600".
+ */
 function trail(...actions: string[]): StepEvent[] {
   return actions.map((spec, i) => {
-    const [type, arg = ""] = spec.split(":");
+    const [head, at] = spec.split("@");
+    const [type, arg = ""] = head.split(":");
     const action =
       type === "scroll"
         ? { type: "scroll", direction: arg || "down" }
@@ -16,6 +20,7 @@ function trail(...actions: string[]): StepEvent[] {
       url: "https://example.com",
       timestamp: new Date(2026, 0, 1, 0, 0, i).toISOString(),
       decision: { thought: "", emotion: "", confusion: 3, action },
+      ...(at === undefined ? {} : { scrollY: Number(at) }),
     } as StepEvent;
   });
 }
@@ -96,5 +101,35 @@ describe("stuckPattern", () => {
       "click:e2", "scroll:down", "click:e3", "back", // …then recovered
     );
     assert.equal(stuckPattern(t), null);
+  });
+});
+
+describe("stuckPattern — scrolling down a long page is not a loop", () => {
+  it("lets a persona work its way down, which a viewport-sized snapshot requires", () => {
+    // the whole point of the viewport split: reaching the bottom of a 21-screen
+    // page takes ~14 scrolls, and "same action 3x" would have killed the session
+    assert.equal(
+      stuckPattern(trail("scroll:down@0", "scroll:down@600", "scroll:down@1200", "scroll:down@1800")),
+      null,
+    );
+  });
+
+  it("still catches a persona wedged at the bottom, scrolling nowhere", () => {
+    assert.ok(
+      stuckPattern(trail("scroll:down@16000", "scroll:down@16000", "scroll:down@16000")),
+      "a persona scrolling against the end of the page ran forever",
+    );
+  });
+
+  it("still catches scrolling up and down on the spot", () => {
+    assert.ok(
+      stuckPattern(
+        trail("scroll:down@0", "scroll:up@600", "scroll:down@0", "scroll:up@600", "scroll:down@0", "scroll:up@600"),
+      ),
+    );
+  });
+
+  it("treats unmeasured scrolls as it always did, so old sessions read the same", () => {
+    assert.ok(stuckPattern(trail("scroll:down", "scroll:down", "scroll:down")));
   });
 });

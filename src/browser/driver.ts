@@ -29,9 +29,23 @@ export function chooseRecording<T extends { file: string; size: number }>(
   return clips.reduce((best, c) => (c.size > best.size ? c : best));
 }
 
+/** Where one ref sits relative to what a visitor can see right now. */
+export interface RefVisibility {
+  /** transparent or zero-size — in the tree, invisible to a person */
+  hidden: boolean;
+  /** starts below the fold; reaching it requires scrolling */
+  belowFold: boolean;
+  /** intersects the viewport as it is scrolled right now */
+  onScreen: boolean;
+}
+
 export interface PageSnapshot {
   ariaYaml: string;
   url: string;
+  /** ref -> where it sits relative to the viewport. See BrowserDriver.measure. */
+  visibility: Record<string, RefVisibility>;
+  /** How far down the page is scrolled. Distinguishes "still moving" from "stuck at the bottom". */
+  scrollY: number;
 }
 
 export class BrowserDriver {
@@ -41,6 +55,8 @@ export class BrowserDriver {
   shotsDir!: string;
   private videoDir?: string;
   private videoSaved = false;
+  /** Visibility from the most recent snapshot — what act() is allowed to touch. */
+  private lastVisibility: Record<string, RefVisibility> = {};
 
   async launch(opts: {
     headless: boolean;
@@ -118,7 +134,94 @@ export class BrowserDriver {
     }
     if (!ariaYaml.trim()) ariaYaml = "(page appears blank)";
 
-    return { ariaYaml, url: this.page.url() };
+    const scrollY = await this.page
+      .evaluate(() => Math.round(window.scrollY))
+      .catch(() => 0);
+
+    this.lastVisibility = await this.measure(ariaYaml);
+    return { ariaYaml, url: this.page.url(), visibility: this.lastVisibility, scrollY };
+  }
+
+  /**
+   * Refuse to act on something the persona was never shown.
+   *
+   * The prompt only carries refs that were on screen, but `aria-ref=` resolves
+   * against the whole document, and refs are sequential and appear in the
+   * rendered history — so a persona could name a footer link it never scrolled
+   * to and the driver would happily scroll down and click it. That would make
+   * the viewport limit a suggestion rather than a rule, which is the exact
+   * thing 712adcd corrected elsewhere: do not describe a prompt-only rule as
+   * enforced.
+   *
+   * An unmeasured ref is allowed through. It is either an older snapshot with
+   * no visibility data or a stale ref, and both fail honestly at click time.
+   */
+  private requireOnScreen(target: string): void {
+    const v = this.lastVisibility[target];
+    if (!v) return;
+    if (v.hidden) {
+      throw new Error(`${target} is not visible on the page — a person could not act on it`);
+    }
+    if (!v.onScreen) {
+      throw new Error(`${target} is not on screen — scroll to it before acting on it`);
+    }
+  }
+
+  /**
+   * Where each ref sits relative to what a visitor can actually see.
+   *
+   * The accessibility tree is the whole document at once. On a 21-screen landing
+   * page that is 776 refs, of which a person looking at the top can see 37 — so
+   * without this the persona clicks footer links it never scrolled to and treats
+   * a hero CTA and a legal link as equals. Measured here rather than in
+   * pruneSnapshot because it needs the live layout, not the YAML.
+   *
+   * Playwright keeps the ref-to-element mapping internal, so there is no way to
+   * do this in one page.evaluate. Resolving every ref concurrently costs ~840ms
+   * on the page above, against an AI call of 5-30s.
+   *
+   * Known limit: for a ref inside an iframe the rect and innerHeight are the
+   * frame's, so it reads as visible whenever it is visible *within its frame*,
+   * even if the frame itself is scrolled off. Walking the frame chain would fix
+   * it; no page seen so far needs that, and a false "visible" only restores the
+   * old behaviour for one element rather than hiding a real control.
+   */
+  private async measure(ariaYaml: string): Promise<Record<string, RefVisibility>> {
+    // `f5e27` is a ref inside frame 5 — signup forms are routinely iframed, and
+    // a pattern matching only `eN` leaves every control in them unmeasured
+    const refs = [...new Set([...ariaYaml.matchAll(/\[ref=((?:f\d+)?e\d+)\]/g)].map((m) => m[1]))];
+    if (refs.length === 0) return {};
+
+    const probe = (node: Element) => {
+      const r = node.getBoundingClientRect();
+      // a transparent ancestor hides its children too, so walk up
+      let opacity = 1;
+      for (let n: Element | null = node; n && n !== document.documentElement; n = n.parentElement) {
+        opacity *= parseFloat(getComputedStyle(n).opacity || "1");
+      }
+      return {
+        hidden: (r.width === 0 && r.height === 0) || opacity < 0.05,
+        belowFold: r.top >= window.innerHeight,
+        onScreen: r.bottom > 0 && r.top < window.innerHeight && r.right > 0 && r.left < window.innerWidth,
+      };
+    };
+
+    const results = await Promise.all(
+      refs.map((ref) =>
+        this.page
+          .locator(`aria-ref=${ref}`)
+          .evaluate(probe)
+          .catch(() => null),
+      ),
+    );
+
+    const out: Record<string, RefVisibility> = {};
+    refs.forEach((ref, i) => {
+      // an unresolvable ref is treated as visible: guessing it away would hide a
+      // real control, and a stale ref simply fails at click time instead
+      out[ref] = results[i] ?? { hidden: false, belowFold: false, onScreen: true };
+    });
+    return out;
   }
 
   async screenshotPath(stepNumber: number): Promise<string> {
@@ -133,6 +236,7 @@ export class BrowserDriver {
 
   async act(decision: Decision): Promise<void> {
     const a = decision.action;
+    if ("target" in a) this.requireOnScreen(a.target);
 
     switch (a.type) {
       case "click": {
@@ -140,7 +244,8 @@ export class BrowserDriver {
         try {
           await el.click({ timeout: 10_000 });
         } catch {
-          // element may be offscreen or overlapped — scroll to it and retry
+          // it passed requireOnScreen, so it was visible when the page was read
+          // — a sticky bar may have moved over it since. Nudge and retry once.
           await el.scrollIntoViewIfNeeded({ timeout: 5_000 }).catch(() => {});
           await el.click({ timeout: 10_000 });
         }

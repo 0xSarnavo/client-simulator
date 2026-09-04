@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ExitReason, StepEvent } from "../types.js";
 import { ExitReasonSchema, StepEventSchema } from "../types.js";
 import { PERSONAS } from "../persona/presets.js";
+import { FlowScoreSchema, type FlowScore } from "../site/flow.js";
 import { fmtDuration, journeySeconds } from "./report.js";
 export { siteSlug } from "../runs.js";
 
@@ -12,6 +13,7 @@ export interface SessionMeta {
   brain: string;
   exit: ExitReason;
   date?: string;
+  flow?: FlowScore | null;
 }
 
 const MetaSchema = z.object({
@@ -19,6 +21,8 @@ const MetaSchema = z.object({
   personaId: z.string(),
   brain: z.string(),
   exit: ExitReasonSchema,
+  // older sessions have no flow field; a malformed one degrades to "unscored"
+  flow: FlowScoreSchema.nullish().catch(null),
 });
 
 /**
@@ -83,6 +87,7 @@ export function generateAggregate(dirs: string[]): string {
   lines.push("");
   lines.push(`- **Sessions:** ${sessions.length}`);
   lines.push(`- **Generated:** ${new Date().toISOString()}`);
+  lines.push(`- **Read as:** simulated prospects — risk signals about where real visitors could stall, not measured traffic`);
   lines.push("");
 
   // verdict summary
@@ -96,6 +101,26 @@ export function generateAggregate(dirs: string[]): string {
   lines.push(`| ❌ Abandoned | ${byKind.abandoned} |`);
   lines.push(`| ⚠️ Guardrail | ${byKind.guardrail} |`);
   lines.push("");
+
+  // flow funnel: how far along the tested flow each simulated prospect got.
+  // Checkpoint order comes from the first scored session — they all share one FLOW.md.
+  const scored = sessions.filter((s) => s.meta.flow?.length);
+  const checkpoints = scored[0]?.meta.flow;
+  if (checkpoints?.length) {
+    lines.push(`## Flow Funnel (${scored.length} scored session(s))`);
+    lines.push("");
+    lines.push(`| # | Checkpoint | Reached | Risk |`);
+    lines.push(`|---|-----------|---------|------|`);
+    checkpoints.forEach((c, i) => {
+      const reached = scored.filter((s) => s.meta.flow?.[i]?.reached).length;
+      const risk =
+        reached === scored.length
+          ? "—"
+          : `${scored.length - reached} prospect(s) never got here — real visitors may stall before it`;
+      lines.push(`| ${i + 1} | ${cell(c.checkpoint)} | ${reached}/${scored.length} | ${risk} |`);
+    });
+    lines.push("");
+  }
 
   // per-persona breakdown
   lines.push(`## By Persona`);
@@ -147,10 +172,10 @@ export function generateAggregate(dirs: string[]): string {
     dropPages.set(u, (dropPages.get(u) ?? 0) + 1);
   }
   if (dropPages.size > 0) {
-    lines.push(`## Most Common Drop Points`);
+    lines.push(`## Where visitors are most likely to stall`);
     lines.push("");
     for (const [page, count] of [...dropPages.entries()].sort((a, b) => b[1] - a[1])) {
-      lines.push(`- \`${page}\` — ${count} persona(s) walked out here`);
+      lines.push(`- \`${page}\` — ${count} of ${sessions.length} simulated prospect(s) walked out here; real visitors may too`);
     }
     lines.push("");
   }
@@ -160,7 +185,7 @@ export function generateAggregate(dirs: string[]): string {
     .filter((s) => s.meta.exit.kind === "abandoned")
     .map((s) => `- "${(s.meta.exit as { reason: string }).reason}"`);
   if (quotes.length > 0) {
-    lines.push(`## Why They Left (verbatim)`);
+    lines.push(`## What could make people leave (in the prospects' own words)`);
     lines.push("");
     lines.push(...quotes);
     lines.push("");

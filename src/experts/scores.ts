@@ -1,5 +1,5 @@
 import type { Expert, ExpertContext } from "./types.js";
-import { exitSummary, trailSummary } from "./types.js";
+import { exitSummary, trailSummary, siteContext } from "./types.js";
 import { parseJsonObject } from "./copywriter.js";
 
 interface Scores {
@@ -26,6 +26,7 @@ export const scoresExpert: Expert = {
 
     const prompt = `You are a conversion analyst. A simulated client just went through a website. Score the experience on 5 dimensions from THEIR perspective.
 
+${siteContext(ctx)}
 Persona: ${ctx.persona.name} (${ctx.persona.temperature}, tech comfort: ${ctx.persona.tech_comfort})
 Goal: ${ctx.persona.goal}
 Outcome: ${exitSummary(ctx.exit)}

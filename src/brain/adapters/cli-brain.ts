@@ -42,8 +42,6 @@ export interface CliBrainOptions {
   args: (prompt: string, o: CliCallOptions) => string[];
   /** Extract the assistant text from the CLI's raw stdout */
   extractText: (stdout: string) => string;
-  /** Pull token/cost figures out of the CLI's raw stdout, when it reports them */
-  extractUsage?: (stdout: string) => Partial<BrainUsage> | null;
   timeoutMs?: number;
   /** Model override passed to the CLI (e.g. "opus", "gpt-5.2") */
   model?: string;
@@ -61,30 +59,6 @@ export interface CliBrainOptions {
   env?: Record<string, string>;
 }
 
-/** What a run cost. Zero fields mean the CLI did not report usage. */
-export interface BrainUsage {
-  calls: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheCreateTokens: number;
-  costUsd: number;
-  /** True when the CLI reports usage at all — opencode and codex do not */
-  reported: boolean;
-}
-
-export function emptyUsage(): BrainUsage {
-  return {
-    calls: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheCreateTokens: 0,
-    costUsd: 0,
-    reported: false,
-  };
-}
-
 export interface CliCallOptions {
   model?: string;
   effort?: string;
@@ -95,10 +69,8 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
   ask(prompt: string): Promise<string>;
   model?: string;
 } {
-  const usage = emptyUsage();
   const self = {
     name: opts.name,
-    usage,
     model: opts.model,
     effort: opts.effort,
     allowDir: opts.allowDir,
@@ -165,18 +137,6 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
       throw new Error(
         `${opts.name} CLI failed: ${result.stderr || result.shortMessage}`,
       );
-    }
-
-    // every attempt counts, including retries — that is the point of the number
-    usage.calls++;
-    const reported = opts.extractUsage?.(result.stdout);
-    if (reported) {
-      usage.reported = true;
-      usage.inputTokens += reported.inputTokens ?? 0;
-      usage.outputTokens += reported.outputTokens ?? 0;
-      usage.cacheReadTokens += reported.cacheReadTokens ?? 0;
-      usage.cacheCreateTokens += reported.cacheCreateTokens ?? 0;
-      usage.costUsd += reported.costUsd ?? 0;
     }
 
     return opts.extractText(result.stdout);

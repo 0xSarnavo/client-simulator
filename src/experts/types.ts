@@ -7,6 +7,8 @@ export interface ExpertContext {
   exit: ExitReason;
   /** "desktop" (default) or "mobile" — session was run at 390×844 touch */
   viewport?: string;
+  /** `runs/<site>/SITE.md` — what the site sells, its walls, its tripwires */
+  brief?: string;
 }
 
 /** A specialist agent that reviews a completed session and returns a markdown section */
@@ -33,14 +35,32 @@ function asData(body: string): string {
 }
 
 export function trailSummary(events: StepEvent[]): string {
-  return asData(
-    events
-      .map(
-        (e) =>
-          `step ${e.n} [${e.url}] confusion ${e.decision.confusion}/10 (${e.decision.emotion}): "${e.decision.thought}" -> ${e.decision.action.type}${e.note ? ` [note: ${e.note}]` : ""}`,
-      )
-      .join("\n"),
+  return (
+    asData(
+      events
+        .map(
+          (e) =>
+            `step ${e.n} [${e.url}] confusion ${e.decision.confusion}/10 (${e.decision.emotion}): "${e.decision.thought}" -> ${e.decision.action.type}${e.note ? ` [note: ${e.note}]` : ""}`,
+        )
+        .join("\n"),
+    ) +
+    // one simulated prospect is a signal, not a measurement — findings must not
+    // read as "users dropped here" when no user has been near the site
+    `\n\nThis was ONE simulated prospect, not measured traffic. Phrase every finding as a risk a real visitor could hit ("people may stall here", "a visitor might not find X") — never as observed user behaviour.`
   );
+}
+
+/**
+ * What the site is, for an expert who otherwise only sees the journey.
+ *
+ * Without it the panel reviews a transcript with the destination missing: it can
+ * see a persona hunting for pricing, but not that the page never states any, nor
+ * that signup is behind an email wall. Same untrusted-data framing as the trail —
+ * the brief is written from the site's own copy.
+ */
+export function siteContext(ctx: ExpertContext): string {
+  if (!ctx.brief?.trim()) return "";
+  return `\nWhat this site is, read from its landing page before the session:\n${asData(ctx.brief.trim())}\n`;
 }
 
 export function exitSummary(exit: ExitReason): string {
