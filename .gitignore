@@ -4,6 +4,7 @@ runs/
 personas/
 LOCAL-SETUP.md
 PIVOT.md
+EVAL-PROMPT.md
 scripts/neatlogs-upload.mjs
 scripts/sweep.sh
 package-lock.json

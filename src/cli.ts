@@ -37,6 +37,7 @@ import {
   text,
 } from "./ui/prompt.js";
 import { arrivalFor, blockedPath, blockedReason, ensureBrief, hasBrief, icpSeed, loadBrief } from "./site/brief.js";
+import { htmlToPdf, packetFor, packetHtml } from "./log/pdf.js";
 import { draftFlow, loadFlow, scoreFlow, type Flow } from "./site/flow.js";
 
 const MAX_RUNS = 10;
@@ -207,7 +208,9 @@ HOW IT RUNS:
 
 ON ITS OWN:
   --report [dirs...]          aggregate past sessions into a funnel
+                              add --by-model for a funnel per model too
   --fix <dirs...>             expert panel over past sessions -> FIXES.md
+  --pdf [sites...]            one shareable PDF per site (funnel + all fixes)
   --doctor                    verify the environment
   --list-personas             show every persona, built-in and custom
   --new-persona "Name"        build one by answering a few questions
@@ -757,7 +760,7 @@ function printSessionSummary(
  * STAGE 2 — aggregate per site. A funnel that mixed several websites together
  * would be meaningless, so each site gets its own runs/<site>/AGGREGATE.md.
  */
-async function report(dirs: string[] | undefined, force = false) {
+async function report(dirs: string[] | undefined, force = false, byModel = false) {
   const targets = dirs?.length ? dirs : findSessionDirs();
   if (targets.length === 0) {
     console.error(
@@ -771,6 +774,23 @@ async function report(dirs: string[] | undefined, force = false) {
   for (const s of loadSessions(targets)) {
     const site = siteSlug(s.meta.url);
     bySite.set(site, [...(bySite.get(site) ?? []), s.dir]);
+  }
+
+  // per-model funnels alongside the combined one, so a sweep can be read
+  // "how did haiku do vs opus" as well as "how did the site do overall"
+  if (byModel) {
+    for (const [site, siteDirs] of bySite) {
+      const groups = new Map<string, string[]>();
+      for (const d of siteDirs) {
+        const m = modelOf(d) ?? "unknown";
+        groups.set(m, [...(groups.get(m) ?? []), d]);
+      }
+      for (const [model, mdirs] of groups) {
+        const out = `runs/${site}/AGGREGATE-${modelSlug(model)}.md`;
+        writeFileSync(out, `<!-- model: ${model} -->\n${generateAggregate(mdirs)}`);
+        console.log(`  ${site} / ${model}: ${mdirs.length} session(s) → ${resolve(out)}`);
+      }
+    }
   }
 
   if (bySite.size === 0) {
@@ -812,6 +832,55 @@ async function report(dirs: string[] | undefined, force = false) {
 /** The aggregate that covers a given session. */
 function aggregatePathFor(url: string): string {
   return `runs/${siteSlug(url)}/AGGREGATE.md`;
+}
+
+/** A session's recorded model, read straight from meta.json. */
+function modelOf(dir: string): string | null {
+  try {
+    return (JSON.parse(readFileSync(`${dir}/meta.json`, "utf8")) as { model?: string }).model ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Model id → filename-safe slug (opencode/big-pickle → opencode-big-pickle). */
+function modelSlug(model: string): string {
+  return model.replace(/[^a-zA-Z0-9._-]+/g, "-");
+}
+
+/**
+ * STANDALONE — one shareable PDF per site (funnel + every expert report).
+ * `--pdf` with no args covers every site in runs/; names/URLs scope it.
+ */
+async function pdf(sites: string[], model?: string) {
+  const targets = sites.length
+    ? sites.map(normalizeUrl)
+    : (existsSync(RUNS_ROOT) ? readdirSync(RUNS_ROOT) : [])
+        .filter((s) => !s.startsWith(".") && existsSync(`${RUNS_ROOT}/${s}/AGGREGATE.md`))
+        .map((s) => `https://${s}`);
+
+  if (targets.length === 0) {
+    console.error("Nothing to render. Run a site first, or pass site names: client-simulator --pdf firecrawl.dev");
+    process.exit(1);
+  }
+
+  for (const url of targets) {
+    // --model scopes the fixes to one brain; default is the best model present
+    const { files, model: usedModel } = packetFor(url, model);
+    if (files.length === 0) {
+      console.log(`  ${siteSlug(url)}: no AGGREGATE.md/FIXES.md yet — skipping (run report/fix first)`);
+      continue;
+    }
+    const out = `${RUNS_ROOT}/${siteSlug(url)}/${siteSlug(url)}-report.pdf`;
+    process.stdout.write(`  ${siteSlug(url)}: ${files.length} section(s)${model ? `, ${model}` : ""}...`);
+    try {
+      await htmlToPdf(packetHtml(url, files, model), out);
+      console.log(` ${resolve(out)}`);
+    } catch (e) {
+      console.log(` failed: ${(e as Error).message.split("\n")[0]}`);
+    }
+  }
+  console.log("");
 }
 
 /** STAGE 3 — expert panel over sessions. Requires stage 2 (aggregate) unless forced. */
@@ -1487,7 +1556,10 @@ async function main() {
     return void (await fix(dirs, common, force));
   }
   if (argv.includes("--report")) {
-    return void (await report(positionals.length ? positionals : undefined, force));
+    return void (await report(positionals.length ? positionals : undefined, force, argv.includes("--by-model")));
+  }
+  if (argv.includes("--pdf")) {
+    return void (await pdf(positionals));
   }
 
   const url = positionals[0];
