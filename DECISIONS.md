@@ -23,6 +23,35 @@ mechanical work. If you cannot fill in **Why**, there is no entry to write.
 
 ---
 
+## 2026-09-04 — Shareable PDFs, per-model funnels, live progress
+
+**Decided:** three operator-facing additions from a real batch session.
+- `--pdf [sites]` renders one send-ready PDF per site (the funnel plus one
+  model's expert reports) via Chromium's `page.pdf()` — no new dependency, and
+  a ~100-line known-subset markdown→HTML renderer rather than a markdown engine
+  for a page read once. Scoped to one model (best present, or `--model`) because
+  a full sweep bundles 40+ sessions into 268 pages nobody sends to a founder.
+- `--report --by-model` writes `AGGREGATE-<model>.md` next to the combined
+  `AGGREGATE.md`, so a sweep reads both "how did the site do" and "how did opus
+  do vs haiku".
+- Every run prints stage banners (`▸ stage 3/5 · visit`) and progress bars;
+  the concurrent agents and the parallel expert panel each advance a bar as
+  they finish — the only honest progress signal once work runs in parallel.
+
+**Why:** the model sweep made all three necessary. Markdown reports are not
+something you hand a client; a single combined funnel hides which model to
+trust; and a headless run of 6 concurrent agents was an unreadable wall of
+interleaved thoughts.
+
+**Not built (parked in EVAL-PROMPT.md, untracked):** a fable-judged eval that
+scores each model's completion, finding quality, guardrail behaviour and report
+usefulness. Left as a prompt to run later, deliberately — the judge model is
+kept out of the swept set so it scores neutrally.
+
+**Files:** `src/log/pdf.ts` (new), `src/log/pdf.test.ts` (new), `src/cli.ts`
+
+**Ref:** uncommitted
+
 ## 2026-09-04 — Booking commits join payment and SSO in the action guard
 
 **Decided:** `blockedAction` refuses scheduler commit controls — "Schedule
