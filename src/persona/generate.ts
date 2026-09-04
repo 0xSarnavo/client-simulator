@@ -23,8 +23,6 @@ const GeneratedPersonaSchema = z.object({
   relation: z.enum(["core", "adjacent", "edge"]).default("core"),
 });
 
-const GeneratedSetSchema = z.array(GeneratedPersonaSchema);
-
 export interface GenerateOptions {
   /** Ideal-customer description. Optional when a site is given — the audience is inferred. */
   description?: string;
@@ -145,7 +143,26 @@ Reply ONLY with a JSON array:
   const start = text.indexOf("[");
   const end = text.lastIndexOf("]");
   if (start === -1 || end === -1) throw new Error("brain reply contained no JSON array");
-  const parsed = GeneratedSetSchema.parse(JSON.parse(text.slice(start, end + 1)));
+  const raw: unknown = JSON.parse(text.slice(start, end + 1));
+  if (!Array.isArray(raw)) throw new Error("brain reply was not a JSON array");
+
+  // salvage per element — one persona answering tech_comfort "medium-high"
+  // must not throw away the nine valid ones beside it (same failure class as
+  // the expert scorecard, 24de073)
+  const parsed: z.infer<typeof GeneratedPersonaSchema>[] = [];
+  let dropped = 0;
+  for (const item of raw) {
+    const r = GeneratedPersonaSchema.safeParse(item);
+    if (r.success) parsed.push(r.data);
+    else {
+      dropped++;
+      const first = r.error.issues[0];
+      console.log(
+        `  ! dropped a malformed persona (${first?.path.join(".")}: ${first?.message})`,
+      );
+    }
+  }
+  if (parsed.length === 0) throw new Error(`all ${dropped} personas in the reply were malformed`);
 
   const outDir = opts.outDir ?? PERSONAS_DIR;
   if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
