@@ -3,6 +3,8 @@ dist/
 runs/
 personas/
 LOCAL-SETUP.md
+PIVOT.md
+scripts/neatlogs-upload.mjs
 package-lock.json
 .DS_Store
 .env
@@ -10,3 +12,8 @@ package-lock.json
 
 # local only — the marketing site deploys straight to Railway
 website/
+runs-backup-*/
+
+# local state — kept here rather than .git/info/exclude so a fresh clone is clean
+.neatlogs-upload-state.json
+.claude/settings.local.json

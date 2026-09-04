@@ -1,65 +1,73 @@
-# client-simulator — Plan
+# PLAN.md
 
-Synthetic client agents that walk any website's onboarding like real humans: think out loud, get confused, walk out — and report where and why they dropped off.
+What is settled, what is next, and what has been ruled out.
 
-## Architecture
+[AGENTS.md](AGENTS.md) is how to run and change the tool. [DECISIONS.md](DECISIONS.md)
+is why each past choice was made. This file is only the forward view — if you are
+about to propose work, read the two lists below first.
 
-```
-persona presets (cold/warm/hot)  →  src/persona/presets.ts
-CLI                              →  src/cli.ts
-step loop + guardrails           →  src/session.ts
-browser (Playwright, a11y "ai")  →  src/browser/driver.ts
-brain adapters (claude/opencode) →  src/brain/adapters/  (persistent sessions)
-prompt builder (tiered history)  →  src/brain/prompt.ts
-JSONL log + markdown report      →  src/log/
-```
+---
 
-## Memory model (3 layers)
+## Settled
 
-1. **Native CLI session** — claude `--session-id <uuid>`, opencode `-s <ses_id>` parsed from `--print-logs`. Full verbatim recall within a run.
-2. **Tiered prompt history** — last 5 steps detailed (thought/emotion/confusion/action), older steps one-line summaries. Rendered from the JSONL events each step.
-3. **Failure hints** — failed Playwright action injected into next prompt with explicit "try a different approach" instruction.
+Shipped and not up for renegotiation without a reason written into DECISIONS.md.
 
-## Reliability systems
+| Area | Note |
+|---|---|
+| Five stages, one command | `site → personas → visit → report → fix`, `--stop` ends early; interactive runs get a continue/redo/settings/stop gate between stages |
+| Site brief + per-site persona sets | `runs/<site>/SITE.md`, `runs/<site>/personas/` (default set: 10) |
+| Bot-wall scout | the brief's scrape detects Cloudflare/captcha walls, writes `runs/<site>/BLOCKED.md`, and runs skip the site until it is deleted or `--plan` re-checks |
+| Flow under test | stated intent → reviewed checkpoints in `runs/<site>/FLOW.md` → per-session scoring → funnel in the aggregate. Optional; no flow file means wander |
+| Concurrent visits | queued personas run at once, each fully isolated; output lines tagged by persona id |
+| Time budget | `--time` minutes per session (default 20), waiting on mail/`wait` excluded |
+| Risk framing | reports warn what real visitors *could* hit; they never claim measured behaviour |
+| Temperature is prior knowledge | cold knows nothing, warm the arrival context, hot the specifics |
+| A persona sees one viewport | plus a headings outline; scrolling costs no patience |
+| Sessions are immutable evidence | reports and expert advice regenerate from them |
+| Ephemeral mailboxes | OTP codes and magic links, per run, destroyed after |
+| Brains | claude, opencode, codex — any brain, any stage |
+| Safety | payment and third-party auth, by action not URL. Best-effort, not a guarantee |
+| Expert panel | 7 experts, one `FIXES.md` per session |
 
-- Goal verification: `complete` decisions are challenged via a strict follow-up call (`buildVerificationPrompt`); rejected claims keep the session going (max 2 verifications).
-- Guardrails: identical-action stuck loop (3×), consecutive action failures (4×), patience cap, brain crash.
-- Click fallback: scrollIntoView + retry before surfacing failure.
-- Settling: domcontentloaded + networkidle + fixed delay after every action.
+## Next
 
-## Roadmap
+In order. Nothing here is committed to; each is stated as the problem, because
+the solution deserves an argument when it is picked up.
 
-### v0.2 — identity ✅ (shipped)
-- Ephemeral mailboxes: alias minted per run (`cold.a1b2c3@domain`), messages purged on run end
-- IMAP provider over any catch-all inbox (Cloudflare Routing → Gmail etc.), env-var configured
-- `check_email` persona action: polls inbox, extracts OTP codes + magic links, feeds back as inbox content
-- `otp_patience_seconds` persona field — waiting too long = in-character abandonment
-- Video recording per session (`video.webm`)
-- Stage architecture: visit / report / fix / all — gated, idempotent, --force override
-- Expert panel: scores (conversion scorecard) + ux (prioritized fixes)
-- Aggregate funnel report (runs/AGGREGATE.md)
+**1. Findings do not survive across sessions.** Every expert reviews one session
+alone, so a wall that stopped five of six prospects is described five separate
+times and never once as a pattern. The flow funnel now shows *where* prospects
+fall out across sessions, but nothing yet reasons about *why* across them. This
+is the gap between "six reports" and "one answer", and it is the most valuable
+thing left.
 
-### v0.2.x — COMPLETE
-- ✅ Persona YAML files + AI persona generator (graph: core + nearest-neighbor, anti-similarity enforced)
-- ✅ Experts: scores, ux, copywriter (rewrite tables), trust/security, accessibility — 5 total
-- ✅ Doctor (deep env check, state-cached 7d, auto-runs on first visit)
-- ✅ Interactive run planner (per-persona counts, max 10, random shuffle) + --runs N + AGENTS.md
-- ✅ max_confusion_before_bail wired into persona prompt
-- 🔲 First real OTP signup run (needs target site choice — everything else is built)
+**2. The wizard and the stage gates have never been driven by a human.** The
+zero-argument guided flow, the flow-checkpoint review gate, and the
+continue/redo/settings menus all compile and are unverified interactively. They
+need someone at a terminal, once.
 
-### v0.3 — deferred
-Removed from plan. Will be re-scoped based on real usage after refinement:
-possible topics were run matrix, returning-visitor memory, funnel clustering —
-none are needed until the tool sees regular use.
+**2b. Costing needs re-deriving.** All token/cost accounting was removed
+2026-09-04 (see DECISIONS.md — parked, not rejected). Whatever replaces it must
+again answer: spend was invisible before it existed, and a step is up to 3 calls
+because decide() retries.
 
-### Expert panel (`client-simulator fix <dir>`)
-Decoupled from visits: sessions record; experts advise. Each expert is one file implementing:
-```ts
-interface Expert { id: string; title: string; run(ctx: ExpertContext, brain: Brain): Promise<string|null> }
-```
-Registered in `src/experts/index.ts`. Built-in: `scores`, `ux`, `copywriter`, `trust`, `a11y`.
-- Panel runs merge into per-session FIXES.md with per-expert sections
+**3. Mobile is a flag, not a trait.** `--mobile` applies to a whole run. Real
+traffic is mixed, and whether a prospect is on a phone is a fact about who they
+are, not about the run.
 
-### Later — memory provider interface (opt-in) — REMOVED from roadmap
-Was: Supermemory-backed returning-visitor personas + semantic cross-run mining.
-Cut during refinement. Revisit only if real usage demands it.
+**4. Frames are measured in their own coordinate space.** An element inside an
+iframe is judged against the frame's viewport, so it reads as visible when the
+frame itself is scrolled away. Walking the frame chain fixes it. No page seen so
+far needs it.
+
+## Ruled out
+
+Full list with evidence: [DECISIONS.md → Tried and rejected](DECISIONS.md#tried-and-rejected--do-not-re-propose).
+The two that get re-proposed most:
+
+- **Screenshots plus model-estimated click coordinates.** Playwright already
+  clicks with a real mouse at real coordinates and hit-tests first. Guessed pixels
+  trade an exact target for an approximate one, and a missed click reads as a
+  broken button — the tool would invent drop-offs.
+- **Returning-visitor memory.** Personas that recall previous runs. Cut during
+  refinement; revisit only if real use demands it.

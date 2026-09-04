@@ -1,5 +1,5 @@
 import type { Expert } from "./types.js";
-import { exitSummary, trailSummary } from "./types.js";
+import { exitSummary, trailSummary, siteContext } from "./types.js";
 import { fail, render } from "./copywriter.js";
 
 export const slopExpert: Expert = {
@@ -11,6 +11,7 @@ export const slopExpert: Expert = {
     const prompt = `You are an AI-slop detector for marketing copy. A prospect visited this site; find every piece of copy that reads as unedited AI-generated filler.
 Apply the installed no-ai-slop skill (AI-writing tells and fixes) if available.
 
+${siteContext(ctx)}
 Persona: ${ctx.persona.name} (${ctx.persona.temperature})
 Outcome: ${exitSummary(ctx.exit)}
 
@@ -72,6 +73,7 @@ export const seoExpert: Expert = {
     const prompt = `You are an SEO auditor doing an on-page basics check. A prospect visited this page; assess what search engines see.
 Apply the installed seo-audit skill (on-page SEO checklist) if available.
 
+${siteContext(ctx)}
 Persona: ${ctx.persona.name}
 Outcome: ${exitSummary(ctx.exit)}
 

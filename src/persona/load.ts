@@ -3,9 +3,20 @@ import { resolve } from "node:path";
 import { parse } from "yaml";
 import { z } from "zod";
 import type { Persona } from "../types.js";
+import { RUNS_ROOT, siteSlug } from "../runs.js";
 import { PERSONAS } from "./presets.js";
 
 export const PERSONAS_DIR = resolve("personas");
+
+/**
+ * Personas generated for one site live beside that site's runs, not in the flat
+ * global directory — a set built for a scraping API is noise when you test a
+ * checkout, and the two used to sit next to each other with nothing saying which
+ * was which.
+ */
+export function sitePersonasDir(url: string): string {
+  return resolve(`${RUNS_ROOT}/${siteSlug(url)}/personas`);
+}
 
 /** Schema for persona YAML files — required: name, temperature, goal. Everything else has sane defaults. */
 const PersonaFileSchema = z.object({
@@ -19,19 +30,19 @@ const PersonaFileSchema = z.object({
   traits: z.array(z.string().min(1)).default([]),
 });
 
-/** Load every valid persona from personas/*.yaml. Invalid files are reported, not fatal. */
-export function loadCustomPersonas(): {
+/** Load every valid persona from a directory of YAML. Invalid files are reported, not fatal. */
+export function loadCustomPersonas(dir: string = PERSONAS_DIR): {
   personas: Record<string, Persona>;
   errors: { file: string; error: string }[];
 } {
   const personas: Record<string, Persona> = {};
   const errors: { file: string; error: string }[] = [];
 
-  if (!existsSync(PERSONAS_DIR)) return { personas, errors };
+  if (!existsSync(dir)) return { personas, errors };
 
-  for (const file of readdirSync(PERSONAS_DIR)) {
+  for (const file of readdirSync(dir)) {
     if (!file.endsWith(".yaml") && !file.endsWith(".yml")) continue;
-    const path = `${PERSONAS_DIR}/${file}`;
+    const path = `${dir}/${file}`;
     try {
       const raw = parse(readFileSync(path, "utf8"));
       const res = PersonaFileSchema.safeParse(raw);
@@ -54,18 +65,53 @@ export function loadCustomPersonas(): {
   return { personas, errors };
 }
 
-/** Built-in presets + custom YAML (custom overrides built-in on id collision) */
-export function getPersonaRegistry(): {
+/**
+ * Built-in presets + global `personas/` + this site's own set, in that order of
+ * precedence — the most specific wins on an id collision.
+ */
+export function getPersonaRegistry(url?: string): {
   personas: Record<string, Persona>;
   errors: { file: string; error: string }[];
 } {
-  const { personas: custom, errors } = loadCustomPersonas();
-  return { personas: { ...PERSONAS, ...custom }, errors };
+  const global = loadCustomPersonas();
+  const site = url
+    ? loadCustomPersonas(sitePersonasDir(url))
+    : { personas: {}, errors: [] as { file: string; error: string }[] };
+  return {
+    personas: { ...PERSONAS, ...global.personas, ...site.personas },
+    errors: [...global.errors, ...site.errors],
+  };
 }
 
-export function resolvePersona(id: string): Persona | null {
-  const { personas } = getPersonaRegistry();
+export function resolvePersona(id: string, url?: string): Persona | null {
+  const { personas } = getPersonaRegistry(url);
   return personas[id] ?? null;
+}
+
+/**
+ * Only the personas generated for this site — not the built-ins, and not the
+ * global `personas/` directory.
+ *
+ * "Everything that is not a built-in" is the tempting definition and it is
+ * wrong: a machine-local global set then counts as this site's, so generation
+ * is skipped on a site that has none, and the run queue fills with personas
+ * built for some other product.
+ */
+export function siteOwnPersonas(url: string): Record<string, Persona> {
+  return loadCustomPersonas(sitePersonasDir(url)).personas;
+}
+
+/** Every site under runs/ that has a generated persona set, for listing and reuse. */
+export function sitesWithPersonas(): { site: string; dir: string; personas: Record<string, Persona> }[] {
+  if (!existsSync(RUNS_ROOT)) return [];
+  const out: { site: string; dir: string; personas: Record<string, Persona> }[] = [];
+  for (const site of readdirSync(RUNS_ROOT)) {
+    const dir = `${RUNS_ROOT}/${site}/personas`;
+    if (!existsSync(dir)) continue;
+    const { personas } = loadCustomPersonas(resolve(dir));
+    if (Object.keys(personas).length > 0) out.push({ site, dir, personas });
+  }
+  return out.sort((a, b) => a.site.localeCompare(b.site));
 }
 
 /** Scaffold a ready-to-edit persona file */

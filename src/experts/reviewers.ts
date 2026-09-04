@@ -1,5 +1,5 @@
 import type { Expert } from "./types.js";
-import { exitSummary, trailSummary } from "./types.js";
+import { exitSummary, trailSummary, siteContext } from "./types.js";
 import { fail, render } from "./copywriter.js";
 
 export const trustExpert: Expert = {
@@ -10,6 +10,7 @@ export const trustExpert: Expert = {
 
     const prompt = `You are a trust/security reviewer evaluating what a prospect could and could NOT verify about this vendor during their visit.
 
+${siteContext(ctx)}
 Persona: ${ctx.persona.name} (${ctx.persona.temperature})
 Outcome: ${exitSummary(ctx.exit)}
 
@@ -61,6 +62,7 @@ export const accessibilityExpert: Expert = {
 ${"```"}
 Apply the installed accessibility skill (WCAG 2.2 POUR principles) as your review framework if available.
 ${"```"}
+${siteContext(ctx)}
 Persona: ${ctx.persona.name}
 Outcome: ${exitSummary(ctx.exit)}
 

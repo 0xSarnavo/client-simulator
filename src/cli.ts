@@ -1,20 +1,28 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { BrowserDriver } from "./browser/driver.js";
 import { getBrain } from "./brain/index.js";
-import { MAX_DECIDE_ATTEMPTS } from "./brain/adapters/cli-brain.js";
 import { PERSONAS } from "./persona/presets.js";
-import { getPersonaRegistry, newPersonaFile } from "./persona/load.js";
+import {
+  PERSONAS_DIR,
+  getPersonaRegistry,
+  loadCustomPersonas,
+  newPersonaFile,
+  siteOwnPersonas,
+  sitePersonasDir,
+  sitesWithPersonas,
+} from "./persona/load.js";
 import { generatePersonas } from "./persona/generate.js";
-import { MAX_VERIFICATIONS, runSession } from "./session.js";
+import { stringify as stringifyYaml } from "yaml";
+import { runSession } from "./session.js";
 import { generateReport } from "./log/report.js";
 import { generateAggregate, loadSessions } from "./log/aggregate.js";
-import { dirLabel, findSessionDirs, sessionPath, siteSlug } from "./runs.js";
+import { RUNS_ROOT, dirLabel, findSessionDirs, sessionPath, siteSlug } from "./runs.js";
 import { EXPERTS } from "./experts/index.js";
 import type { Brain, ExitReason, Persona, StepEvent } from "./types.js";
 import type { MailProvider, Mailbox, MailMessage } from "./mail/types.js";
-import { ImapProvider } from "./mail/imap.js";
+import { ImapProvider, type ImapConfig } from "./mail/imap.js";
 import { extractCodes, extractLinks } from "./mail/types.js";
 import { runDoctor, doctorStateExists } from "./doctor.js";
 import { createInterface } from "node:readline/promises";
@@ -28,9 +36,13 @@ import {
   select,
   text,
 } from "./ui/prompt.js";
-import { readSite } from "./site/read.js";
+import { arrivalFor, blockedPath, blockedReason, ensureBrief, hasBrief, icpSeed, loadBrief } from "./site/brief.js";
+import { draftFlow, loadFlow, scoreFlow, type Flow } from "./site/flow.js";
 
 const MAX_RUNS = 10;
+/** Stages, in the order they must run. `--stop <stage>` ends after one of these. */
+const STAGES = ["site", "personas", "visit", "report", "fix"] as const;
+type Stage = (typeof STAGES)[number];
 
 /** Interactive run planner: how many cold/warm/hot, then random order */
 async function promptRunPlan(): Promise<string[]> {
@@ -91,9 +103,19 @@ async function promptRunPlan(): Promise<string[]> {
 }
 
 /** --runs N: N prospects, persona picked at random each time */
-function randomRunPlan(n: number): string[] {
-  const pool = ["cold", "warm", "hot"];
-  return Array.from({ length: Math.min(n, MAX_RUNS) }, () => pool[Math.floor(Math.random() * 3)]);
+/**
+ * `--runs N` draws from the personas built for this site when it has any, and
+ * only falls back to cold/warm/hot when it does not. Drawing from the built-ins
+ * on a site with its own set would silently ignore the set that was just
+ * generated for it.
+ */
+function randomRunPlan(n: number, url?: string): string[] {
+  const site = url ? Object.keys(siteOwnPersonas(url)) : [];
+  const pool = site.length ? site : ["cold", "warm", "hot"];
+  return Array.from(
+    { length: Math.min(n, MAX_RUNS) },
+    () => pool[Math.floor(Math.random() * pool.length)],
+  );
 }
 
 /** Load KEY=VALUE pairs from .env in the cwd (existing env vars win) */
@@ -112,70 +134,94 @@ function loadDotEnv() {
   }
 }
 
-function setupMail(): { provider: MailProvider } | null {
+function mailConfig(): ImapConfig | null {
   loadDotEnv();
   const { CLIENTSIM_IMAP_HOST, CLIENTSIM_IMAP_USER, CLIENTSIM_IMAP_PASS, CLIENTSIM_MAIL_DOMAIN } =
     process.env;
   if (!CLIENTSIM_IMAP_HOST || !CLIENTSIM_IMAP_USER || !CLIENTSIM_IMAP_PASS || !CLIENTSIM_MAIL_DOMAIN) {
     return null;
   }
-  const provider = new ImapProvider({
+  return {
     host: CLIENTSIM_IMAP_HOST,
     user: CLIENTSIM_IMAP_USER,
     pass: CLIENTSIM_IMAP_PASS,
     domain: CLIENTSIM_MAIL_DOMAIN,
     tls: process.env.CLIENTSIM_IMAP_TLS !== "false",
     port: process.env.CLIENTSIM_IMAP_PORT ? Number(process.env.CLIENTSIM_IMAP_PORT) : undefined,
-  });
+  };
+}
+
+function setupMail(): { provider: MailProvider } | null {
+  const cfg = mailConfig();
+  if (!cfg) return null;
   console.log("  mail: IMAP provider configured (ephemeral mailboxes enabled)");
-  return { provider };
+  return { provider: new ImapProvider(cfg) };
 }
 
 function printUsage() {
   console.log(`client-simulator - synthetic clients that walk your onboarding and report where they leave
 
 USAGE:
-  client-simulator visit <url> [options]      stage 1: spawn persona runs (one session per persona)
-  client-simulator report [dirs]              stage 2: aggregate funnel report across sessions
-  client-simulator fix <dirs...> [options]    stage 3: expert panel reviews sessions -> FIXES.md
-  client-simulator all <url> [options]        run 1 -> 2 -> 3 together
-  client-simulator doctor [--force]           verify environment (runs automatically on first visit)
-  client-simulator personas [--new "Name"]    list personas / scaffold a custom one
-  client-simulator personas generate          AI-builds a persona graph from your ideal-customer
-                                        description (+ optional --site scrape):
-                                          --from "who buys this" --site <url> --count 4
-  client-simulator mailtest                   test mailbox create/receive/extract/destroy
+  client-simulator <url> [options]
 
-  Run \`client-simulator\` with no arguments for a guided wizard (pick command,
-  URL, brain, model and effort from menus instead of typing flags).
+  That is the whole tool. Point it at a site and it reads the page, writes a
+  brief, builds prospects who fit the product, sends them through, aggregates
+  the funnel, and runs the expert panel. It asks only what it cannot work out.
 
-OPTIONS:
-  --persona <list>            explicit persona queue, e.g. cold,warm,hot (max 10)
-  --runs <n>                  number of prospects, personas chosen at random (max 10)
-  --brain <claude|opencode|codex>   which AI CLI plays the client (prompted if omitted)
-  --model <name>              pin the model (prompted if omitted; levels read live from the CLI)
-  --effort <level>            reasoning effort (prompted if omitted; claude: low..max,
-                              codex: low|medium|high, opencode: no effort knob)
-  --headless                  run browser without a visible window
-  --mobile                    run at phone viewport (390×844, touch) instead of desktop
-  --plan                      re-run the site read + persona plan on a known site
-  --force                     re-run checks / regenerate outputs even if up to date
-  -h, --help                  show this help
+    client-simulator firecrawl.dev                  the lot
+    client-simulator firecrawl.dev --yes            the lot, asking nothing
+    client-simulator firecrawl.dev --stop personas  just read it and build prospects
+    client-simulator firecrawl.dev --persona cold --headless
 
-Any of --brain / --model / --effort you omit is asked for with an arrow-key menu;
-the model and effort lists are read live from the CLI you pick, so they stay
-current. Pass the flags to skip the prompts entirely (and in CI, where there is
-no TTY, the defaults apply silently).
+  Run it bare for a guided flow: \`client-simulator\`
 
-The first time you test a site, visit reads the landing page (product, audience,
-main CTA) and offers a choice: the built-in personas, or a set generated to fit
-that page which you then pick from. Later visits skip straight to persona counts;
---plan re-runs it. With no --persona and no --runs, visit asks interactively how
-many cold/warm/hot prospects to send, then shuffles the order randomly.
+STAGES, in order:
+  site      read the page  -> runs/<site>/SITE.md
+  personas  build prospects-> runs/<site>/personas/
+  visit     send them      -> one session each
+  report    the funnel     -> runs/<site>/AGGREGATE.md
+  fix       expert panel   -> FIXES.md per session
 
-STAGE COMBINATIONS:
-  visit only / report only / fix only (on past sessions) / all — any subset works,
-  as long as stages run in order: a stage needs the artifacts of the one before it.`);
+  --stop <stage>              end after that one (default: run them all)
+  --flow "<intent>"           the flow to test, e.g. "signup through to the
+                              dashboard" — checkpoints are drafted for review,
+                              sessions are scored against them (runs/<site>/FLOW.md)
+  --plan                      re-read the site and rebuild its personas
+  --force                     regenerate outputs that are already up to date
+
+WHO GOES IN:
+  --persona <list>            explicit queue, e.g. cold,warm,hot (max 10)
+  --runs <n>                  n prospects, chosen at random (max 10)
+                              omit both and it offers the personas built for this site
+
+HOW IT RUNS:
+  --brain <claude|opencode|codex>   which AI CLI plays the client
+  --model <name>              pin the model (lists are read live from the CLI)
+  --effort <level>            reasoning effort (claude: low..max, codex: low|medium|high)
+  --time <minutes>            wall-clock ceiling per session (default 20; waiting
+                              on mail and pauses is excluded — slow mail is not
+                              the site's fault)
+  --headless                  no visible browser window
+  --mobile                    phone viewport (390x844, touch) instead of desktop
+  --yes                       never prompt; take the default for every question
+
+ON ITS OWN:
+  --report [dirs...]          aggregate past sessions into a funnel
+  --fix <dirs...>             expert panel over past sessions -> FIXES.md
+  --doctor                    verify the environment
+  --list-personas             show every persona, built-in and custom
+  --new-persona "Name"        build one by answering a few questions
+  --mailtest                  test mailbox create/receive/extract/destroy
+  -h, --help                  this
+
+PER SITE, ON DISK:
+  runs/<site>/SITE.md         what the page sells, to whom, its walls and tripwires
+  runs/<site>/personas/       the prospects built for this product
+  runs/<site>/AGGREGATE.md    the funnel across every session
+
+Prior knowledge is rationed by temperature, because that is most of what makes
+the three behave differently: cold arrives knowing nothing, warm knows what it
+came for, hot already looked up the price and how to sign up.`);
 }
 
 interface CommonArgs {
@@ -187,10 +233,18 @@ interface CommonArgs {
   effort?: string;
   headless: boolean;
   mobile?: boolean;
-  /** force the first-visit site read + persona plan on an already-tested site */
+  /** wall-clock minutes per session; waiting on mail/`wait` is excluded */
+  time?: number;
+  /** the flow to test, e.g. "signup through to the dashboard" */
+  flow?: string;
+  /** force the site read + persona rebuild on an already-tested site */
   plan?: boolean;
   /** set once the picker has run, so chained stages never ask twice */
   brainResolved?: boolean;
+  /** never prompt — take the default for every question */
+  yes?: boolean;
+  /** last stage to run; undefined means all three */
+  stop?: Stage;
 }
 
 function parseCommon(argv: string[]): CommonArgs {
@@ -209,115 +263,240 @@ function parseCommon(argv: string[]): CommonArgs {
     if (a === "--personas" || a === "--persona")
       args.personas = value(++i, a).split(",").map((s) => s.trim()).filter(Boolean);
     else if (a === "--runs") args.runs = parseInt(value(++i, a), 10);
+    else if (a === "--time") {
+      const t = parseInt(value(++i, a), 10);
+      if (!Number.isFinite(t) || t < 1 || t > 120) {
+        console.error(`--time takes minutes from 1 to 120. Got "${argv[i]}".`);
+        process.exit(1);
+      }
+      args.time = t;
+    }
+    else if (a === "--flow") args.flow = value(++i, a);
     else if (a === "--brain") args.brain = value(++i, a);
     else if (a === "--model") args.model = value(++i, a);
     else if (a === "--effort") args.effort = value(++i, a);
-    else if (a === "--headless") args.headless = true;
+    else if (a === "--stop") {
+      const s = value(++i, a);
+      if (!(STAGES as readonly string[]).includes(s)) {
+        console.error(`--stop takes one of: ${STAGES.join(", ")}. Got "${s}".`);
+        process.exit(1);
+      }
+      args.stop = s as Stage;
+    } else if (a === "--headless") args.headless = true;
     else if (a === "--mobile") args.mobile = true;
     else if (a === "--plan") args.plan = true;
+    else if (a === "--yes" || a === "-y") args.yes = true;
   }
   return args;
 }
 
-/** A site is "new" until it has its own folder under runs/. */
-function isNewSite(url: string): boolean {
-  return !existsSync(`runs/${siteSlug(url)}`);
+/** Does this stage run, given --stop? */
+function runsThrough(stage: Stage, stop?: Stage): boolean {
+  return !stop || STAGES.indexOf(stage) <= STAGES.indexOf(stop);
 }
 
 /**
- * First-visit planning: show what the site actually is, then let the user decide
- * between the generic built-ins and a persona set generated for this site.
- * Returns the run queue, or null to fall through to the normal planner.
+ * Make sure `runs/<site>/SITE.md` exists before anyone is sent in.
+ *
+ * This runs on every visit to a site that has no brief yet — including when
+ * --persona was passed. That ordering is the whole point: the brief used to sit
+ * behind the interactive planner, so `--persona cold` skipped it and the persona
+ * arrived knowing nothing about the product. It then spent its whole patience
+ * working out what the site was and the run was filed as a site failure.
  */
-async function planFirstVisit(
+async function prepareSite(
   url: string,
+  common: CommonArgs,
   brain: Brain & { ask?(prompt: string): Promise<string> },
-): Promise<string[] | null> {
-  heading(`New site — ${siteSlug(url)}`);
+): Promise<void> {
+  // a site already marked blocked is not re-scraped every run; --plan re-checks
+  if (common.plan) rmSync(blockedPath(url), { force: true });
+  else if (blockedReason(url)) return;
 
+  const fresh = !hasBrief(url);
+  if (!fresh && !common.plan) return;
+
+  heading(fresh ? `New site — ${siteSlug(url)}` : `Re-reading ${siteSlug(url)}`);
   process.stdout.write("  \x1b[2mreading the page...\x1b[0m");
-  const read = await readSite(url, brain);
-  process.stdout.clearLine(0);
-  process.stdout.cursorTo(0);
-
-  if (read) {
-    console.log(`  ${"Product".padEnd(9)} ${read.product}`);
-    console.log(`  ${"For".padEnd(9)} ${read.audience}`);
-    console.log(`  ${"Main CTA".padEnd(9)} ${read.cta}`);
-  } else {
-    console.log("  (could not read the page — continuing anyway)");
+  const brief = await ensureBrief(url, brain, { force: common.plan });
+  if (process.stdout.isTTY) {
+    process.stdout.clearLine(0);
+    process.stdout.cursorTo(0);
   }
 
-  const how = await select({
-    message: "How do you want to test it?",
-    choices: [
-      { value: "builtin", label: "built-in personas", hint: "cold / warm / hot — start now" },
-      { value: "generate", label: "generate for this site", hint: "personas fitted to this page" },
-      { value: "both", label: "both", hint: "generate a set, then also pick built-in counts" },
-    ],
-  });
-  if (how === "builtin") return null;
-
-  const countAnswer = await text({
-    message: "How many personas to generate? (2-10, Enter for 6):",
-    fallback: "6",
-    validate: (v) => (/^\d+$/.test(v) && +v >= 2 && +v <= 10 ? undefined : "give a number from 2 to 10"),
-  });
-
-  let generated: { id: string; name: string; temperature: string }[] = [];
-  try {
-    const { generatePersonas } = await import("./persona/generate.js");
-    const result = await generatePersonas({
-      description: read ? `${read.audience} (product: ${read.product})` : undefined,
-      count: Number(countAnswer),
-      brain,
-      site: url,
-    });
-    console.log(result.graph);
-    generated = result.written;
-  } catch (e) {
-    console.error(`\n  persona generation failed: ${(e as Error).message.slice(0, 160)}`);
-    console.log("  falling back to the built-in personas.\n");
-    return null;
+  if (!brief) {
+    console.log("  (could not read the page — personas will go in cold)\n");
+    return;
   }
-
-  if (generated.length === 0) {
-    console.log("  no personas were written — using the built-ins instead.\n");
-    return null;
+  // the table rows are the summary worth seeing; the rest is in the file
+  for (const line of brief.split("\n")) {
+    const row = line.match(/^\| \*\*(.+?)\*\* \| (.+?) \|$/);
+    if (row) console.log(`  ${row[1].padEnd(9)} ${row[2]}`);
   }
-
-  const queue = await multiselect({
-    message: "Which of them should visit the site? (one run each)",
-    choices: generated.map((p) => ({
-      value: p.id,
-      label: p.id,
-      hint: `${p.name} — ${p.temperature}`,
-    })),
-  });
-
-  if (how === "both") {
-    console.log("");
-    return [...queue, ...(await promptRunPlan())];
-  }
-  return queue;
+  console.log(`\n  brief: ${briefPathLabel(url)}\n`);
 }
 
-/** Resolve the run queue: explicit personas > --runs N > interactive planner */
-async function resolveRunPlan(
-  common: CommonArgs,
-  url: string,
-  brain: Brain & { ask?(prompt: string): Promise<string> },
-): Promise<string[]> {
-  if (common.personas?.length) {
-    if (common.personas.length > MAX_RUNS) common.personas = common.personas.slice(0, MAX_RUNS);
-    return common.personas;
-  }
-  if (common.runs && common.runs > 0) return randomRunPlan(common.runs);
+function briefPathLabel(url: string): string {
+  return `runs/${siteSlug(url)}/SITE.md`;
+}
 
-  // a site you have never tested gets a one-time read + persona plan
-  if (isInteractive() && (common.plan || isNewSite(url))) {
-    const planned = await planFirstVisit(url, brain);
-    if (planned?.length) return planned.slice(0, MAX_RUNS);
+/**
+ * Resolve the flow under test, with a review gate: the AI drafts checkpoints
+ * from the brief, but the operator confirms them before anyone runs — a wrong
+ * flow silently poisons persona generation and every score after it.
+ */
+async function prepareFlow(
+  url: string,
+  common: CommonArgs,
+  brain: Brain & { ask?(prompt: string): Promise<string> },
+): Promise<Flow | null> {
+  const existing = loadFlow(url);
+  if (existing && !common.plan) return existing;
+
+  let intent = common.flow;
+  if (!intent && !common.yes && isInteractive()) {
+    intent = (
+      await text({
+        message: "What flow should they test? (e.g. \"signup through to the dashboard\" — Enter to let prospects wander):",
+        fallback: "",
+      })
+    ).trim();
+  }
+  if (!intent) return existing; // no flow stated — wander, as before
+
+  process.stdout.write("  \x1b[2mdrafting checkpoints...\x1b[0m");
+  let flow = await draftFlow(url, intent, loadBrief(url) ?? "(no brief)", brain);
+  if (process.stdout.isTTY) {
+    process.stdout.clearLine(0);
+    process.stdout.cursorTo(0);
+  }
+  if (!flow) {
+    console.log("  (could not draft checkpoints — running without a flow)\n");
+    return null;
+  }
+
+  // review gate — skipped by --yes and in automation
+  while (!common.yes && isInteractive()) {
+    console.log(`\n  Flow: ${flow.intent}`);
+    flow.checkpoints.forEach((c, i) => console.log(`    ${i + 1}. ${c}`));
+    const choice = await select({
+      message: "Use these checkpoints?",
+      choices: [
+        { value: "use", label: "use these" },
+        { value: "redo", label: "regenerate" },
+        { value: "edit", label: "edit the file, then continue", hint: flowPathLabel(url) },
+        { value: "none", label: "no flow — let them wander" },
+      ],
+    });
+    if (choice === "use") break;
+    if (choice === "none") return null;
+    if (choice === "edit") {
+      await text({ message: `Edit ${flowPathLabel(url)}, then press Enter:`, fallback: "" });
+      flow = loadFlow(url) ?? flow;
+      break;
+    }
+    const redone = await draftFlow(url, intent, loadBrief(url) ?? "(no brief)", brain);
+    if (redone) flow = redone;
+    else console.log("  (regeneration failed — keeping the previous draft)");
+  }
+
+  console.log(`\n  flow: ${flowPathLabel(url)} (${flow.checkpoints.length} checkpoints)\n`);
+  return flow;
+}
+
+function flowPathLabel(url: string): string {
+  return `runs/${siteSlug(url)}/FLOW.md`;
+}
+
+/**
+ * Make sure this site has its own persona set, generating one if it has none.
+ * Returns the ids that were generated, or an empty array.
+ */
+async function prepareSitePersonas(
+  url: string,
+  common: CommonArgs,
+  brain: Brain & { ask?(prompt: string): Promise<string> },
+  flow?: Flow | null,
+): Promise<{ id: string; name: string; temperature: string }[]> {
+  const outDir = sitePersonasDir(url);
+  // only this site's own set — a global personas/ directory is not evidence
+  // that this product has been thought about
+  const existing = Object.entries(siteOwnPersonas(url)).map(([id, p]) => ({
+    id,
+    name: p.name,
+    temperature: p.temperature,
+  }));
+
+  if (existing.length > 0 && !common.plan) return existing;
+
+  let count = 10;
+  if (!common.yes && isInteractive()) {
+    const answer = await text({
+      message: "How many personas should I build for this site? (2-10, Enter for 10, 0 to skip):",
+      fallback: "10",
+      validate: (v) =>
+        /^\d+$/.test(v) && (+v === 0 || (+v >= 2 && +v <= 10))
+          ? undefined
+          : "give 0 to skip, or a number from 2 to 10",
+    });
+    count = Number(answer);
+    if (count === 0) return existing;
+  }
+
+  try {
+    const result = await generatePersonas({
+      description: icpSeed(url) ?? undefined,
+      count,
+      brain,
+      site: url,
+      // the brief instead of a second scrape: it is both cheaper and better
+      // context than a raw accessibility dump of the same page
+      siteContext: loadBrief(url) ?? undefined,
+      flowContext: flow
+        ? `${flow.intent}\nCheckpoints: ${flow.checkpoints.join(" -> ")}`
+        : undefined,
+      outDir,
+    });
+    console.log(result.graph);
+    return result.written.map((p) => ({ id: p.id, name: p.name, temperature: p.temperature }));
+  } catch (e) {
+    console.error(`  persona generation failed: ${(e as Error).message.slice(0, 160)}`);
+    console.log("  falling back to the built-in personas.\n");
+    return existing;
+  }
+}
+
+/**
+ * Resolve the run queue.
+ *
+ * Explicit flags win, as they always did. What changed is what happens with no
+ * flags: the site's own generated personas are offered first, and the built-in
+ * cold/warm/hot counts are the fallback rather than the default.
+ */
+async function resolveRunPlan(
+  url: string,
+  common: CommonArgs,
+  generated: { id: string; name: string; temperature: string }[],
+): Promise<string[]> {
+  if (common.personas?.length) return common.personas.slice(0, MAX_RUNS);
+  if (common.runs && common.runs > 0) return randomRunPlan(common.runs, url);
+
+  if (common.yes || !isInteractive()) {
+    // unattended: everything built for this site, else one of each built-in
+    return generated.length ? generated.slice(0, MAX_RUNS).map((p) => p.id) : ["cold", "warm", "hot"];
+  }
+
+  if (generated.length > 0) {
+    const queue = await multiselect({
+      message: "Which prospects should visit? (one run each)",
+      choices: generated.map((p) => ({
+        value: p.id,
+        label: p.id,
+        hint: `${p.name} — ${p.temperature}`,
+      })),
+    });
+    if (queue.length) return queue.slice(0, MAX_RUNS);
+    console.log("  none picked — falling back to the built-ins.\n");
   }
   return promptRunPlan();
 }
@@ -365,8 +544,32 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
     if (!ok) process.exit(1);
   }
 
-  const personaIds = await resolveRunPlan(common, url, planningBrain);
-  const registry = getPersonaRegistry();
+  // the brief comes first, and comes even when --persona was passed: it is the
+  // ICP the persona set is built from, and the prior knowledge warm/hot arrive with
+  await prepareSite(url, common, planningBrain);
+  const blocked = blockedReason(url);
+  if (blocked) {
+    console.log(
+      `  ⛔ ${siteSlug(url)} is behind a bot wall (${blocked}) — skipping. Delete runs/${siteSlug(url)}/BLOCKED.md or pass --plan to re-check.\n`,
+    );
+    return [];
+  }
+  const flow = await prepareFlow(url, common, planningBrain);
+  if (!runsThrough("personas", common.stop)) {
+    console.log(`  Stopped after the site read. See ${briefPathLabel(url)}\n`);
+    return [];
+  }
+
+  const generated = common.personas?.length
+    ? []
+    : await prepareSitePersonas(url, common, planningBrain, flow);
+  if (!runsThrough("visit", common.stop)) {
+    console.log(`  Stopped after building personas. See runs/${siteSlug(url)}/personas/\n`);
+    return [];
+  }
+
+  const personaIds = await resolveRunPlan(url, common, generated);
+  const registry = getPersonaRegistry(url);
   for (const pid of personaIds) {
     if (!registry.personas[pid]) {
       console.error(
@@ -377,8 +580,8 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
   }
 
   const dirs: string[] = [];
-  const mail = setupMail();
-  if (!mail) {
+  const mailCfg = mailConfig();
+  if (!mailCfg) {
     // with a mailbox the harness forces every typed address to the ephemeral
     // one; without it, whatever the brain invents is what real signup forms get
     console.warn(
@@ -388,29 +591,31 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
     );
   }
 
-  // A step is usually one call, but decide() retries a malformed reply and each
-  // attempt is its own CLI call. Completion checks (max 2 per session) do not
-  // retry. Experts are stage 3 and counted there.
-  const steps = personaIds.reduce((n, pid) => n + registry.personas[pid].patience_steps, 0);
-  const checks = personaIds.length * MAX_VERIFICATIONS;
+  // Everyone runs at once — the queue (≤ MAX_RUNS) is the concurrency cap.
+  // Each session already has its own browser, brain, mailbox and directory;
+  // sharing any of those across personas is the bug 646556a fixed.
+  const parallel = personaIds.length > 1;
   console.log(
-    `\n  ${personaIds.length} prospect(s) queued: ${personaIds.join(", ")} | ${describeRun(common)}`,
-  );
-  console.log(
-    `  stage 1 budget: ~${steps + checks} AI calls, up to ${steps * MAX_DECIDE_ATTEMPTS + checks} if replies need retrying` +
-      ` (personas stop earlier when they finish or leave)\n`,
+    `\n  ${personaIds.length} prospect(s) ${parallel ? "going in together" : "queued"}: ${personaIds.join(", ")} | ${describeRun(common)}\n`,
   );
 
-  for (const pid of personaIds) {
-    const persona: Persona = registry.personas[pid];
+  // dirs are minted before anyone launches: sessionPath's same-second suffix
+  // check is exists-then-create, which two concurrent starts would race
+  const runs = personaIds.map((pid, i) => {
     const sessionDir = sessionPath(url, pid);
     mkdirSync(`${sessionDir}/shots`, { recursive: true });
+    return { pid, sessionDir, n: i + 1 };
+  });
 
-    // EPHEMERAL MAILBOX: created per persona run, destroyed after
+  let done = 0;
+  const runOne = async ({ pid, sessionDir, n }: (typeof runs)[number]) => {
+    const persona: Persona = registry.personas[pid];
+    const tag = parallel ? pid : undefined;
+
+    // one provider per agent — an IMAP connection is stateful, and concurrent
+    // polls through a shared one interleave on a single socket
+    const mail = mailCfg ? new ImapProvider(mailCfg) : undefined;
     let box: Mailbox | undefined;
-    if (mail) {
-      box = await mail.provider.create(pid);
-    }
 
     // fresh brain per persona — a shared one would carry the previous
     // persona's whole conversation into this one's first impression
@@ -422,6 +627,8 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
 
     const driver = new BrowserDriver();
     try {
+      // EPHEMERAL MAILBOX: created per persona run, destroyed after
+      if (mail) box = await mail.create(pid);
       await driver.launch({
         headless: common.headless,
         shotsDir: `${sessionDir}/shots`,
@@ -437,17 +644,29 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
           brain,
           driver,
           sessionDir,
-          mail: mail && box ? { provider: mail.provider, box } : undefined,
+          mail: mail && box ? { provider: mail, box } : undefined,
+          // cold gets nothing, warm the arrival paragraph, hot also the specifics
+          arrival: arrivalFor(url, persona.temperature) ?? undefined,
+          timeBudgetMinutes: common.time,
+          tag,
         }));
       } catch (e) {
         const detail = (e as Error).message.split("\n")[0];
-        console.log(`\n  session failed: ${detail}`);
+        console.log(`\n  ${tag ? `[${tag}] ` : ""}session failed: ${detail}`);
         exit = { kind: "guardrail", detail: `Session could not run: ${detail}` };
+      }
+
+      // one un-retried call per session: which flow checkpoints did it reach?
+      const flowScore = flow && events.length > 0 ? await scoreFlow(flow, events, brain) : null;
+      if (flowScore) {
+        console.log(
+          `  ${tag ? `[${tag}] ` : ""}flow: ${flowScore.filter((c) => c.reached).length}/${flowScore.length} checkpoints reached`,
+        );
       }
 
       writeFileSync(
         `${sessionDir}/report.md`,
-        generateReport({ persona, url, brain: describeRun(common), events, exit, usage: (brain as { usage?: never }).usage }),
+        generateReport({ persona, url, brain: describeRun(common).replace(/^brain: /, ""), events, exit, flow: flowScore ?? undefined }),
       );
       writeFileSync(
         `${sessionDir}/meta.json`,
@@ -458,9 +677,9 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
             brain: brain.name,
             model: common.model ?? null,
             effort: common.effort ?? null,
-            usage: (brain as { usage?: unknown }).usage ?? null,
             exit,
             viewport: common.mobile ? "mobile" : "desktop",
+            flow: flowScore,
           },
           null,
           2,
@@ -468,23 +687,28 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
       );
       dirs.push(sessionDir);
 
-      printSessionSummary(exit, events, sessionDir, dirs.length, personaIds.length);
+      printSessionSummary(exit, events, sessionDir, ++done, personaIds.length);
+    } catch (e) {
+      // a setup failure (mailbox, browser launch) must not kill the other runs
+      console.error(`  ${tag ? `[${tag}] ` : ""}run failed before the session started: ${(e as Error).message.split("\n")[0]}`);
     } finally {
       // before close(), and in finally, so an error mid-session still yields a video
       await driver.saveVideo(`${sessionDir}/video.webm`).catch(() => {});
       await driver.close();
       if (mail && box) {
-        process.stdout.write("  🗑 destroying mailbox...");
         try {
-          await mail.provider.destroy(box);
-          await (mail.provider as ImapProvider).close?.();
-          console.log(" gone");
+          await mail.destroy(box);
+          await mail.close?.();
+          console.log(`  ${tag ? `[${tag}] ` : ""}🗑 mailbox destroyed`);
         } catch (e) {
-          console.log(` failed: ${(e as Error).message.slice(0, 100)}`);
+          console.log(`  ${tag ? `[${tag}] ` : ""}🗑 mailbox destroy failed: ${(e as Error).message.slice(0, 100)}`);
         }
       }
     }
-  }
+  };
+
+  if (parallel) await Promise.all(runs.map(runOne));
+  else for (const r of runs) await runOne(r);
   return dirs;
 }
 
@@ -603,12 +827,19 @@ async function fix(dirs: string[], common: CommonArgs, force = false) {
       );
       continue;
     }
-    const registry = getPersonaRegistry();
+    // scoped to this session's own site, or a persona generated for it is not
+    // in the registry and the panel reviews the run as Skeptical Sam
+    const registry = getPersonaRegistry(s.meta.url);
     const persona = registry.personas[s.meta.personaId] ?? PERSONAS.cold;
+    if (!registry.personas[s.meta.personaId]) {
+      console.log(
+        `  ! persona "${s.meta.personaId}" not found — reviewing as ${PERSONAS.cold.name}, which will skew the advice`,
+      );
+    }
     console.log(
       `\n  Expert panel: ${persona.name} @ ${s.meta.url} (${s.events.length} steps)`,
     );
-    console.log(`  Experts: ${EXPERTS.map((e) => e.id).join(", ")} (${EXPERTS.length} AI calls)`);
+    console.log(`  Experts: ${EXPERTS.map((e) => e.id).join(", ")}`);
 
     const sections: string[] = [];
     for (const expert of EXPERTS) {
@@ -621,7 +852,15 @@ async function fix(dirs: string[], common: CommonArgs, force = false) {
         allowDir: s.dir,
       });
       const section = await expert.run(
-        { persona, url: s.meta.url, events: s.events, exit: s.meta.exit, viewport: (s.meta as any).viewport },
+        {
+          persona,
+          url: s.meta.url,
+          events: s.events,
+          exit: s.meta.exit,
+          viewport: (s.meta as any).viewport,
+          // the panel used to review a journey with the destination missing
+          brief: loadBrief(s.meta.url) ?? undefined,
+        },
         expertBrain,
       );
       if (process.stdout.isTTY) {
@@ -646,16 +885,109 @@ async function fix(dirs: string[], common: CommonArgs, force = false) {
   }
 }
 
+/**
+ * Between-stage gate: what just happened, then continue / redo / settings /
+ * stop. Silent under --yes and without a TTY — automation must never hang here.
+ */
+async function stageGate(
+  doneMsg: string,
+  nextLabel: string,
+  common: CommonArgs,
+): Promise<"continue" | "redo" | "stop"> {
+  if (common.yes || !isInteractive()) return "continue";
+  for (;;) {
+    const choice = await select({
+      message: `${doneMsg}. Next: ${nextLabel}`,
+      choices: [
+        { value: "continue", label: `continue — ${nextLabel}` },
+        { value: "redo", label: "redo the stage that just ran" },
+        { value: "settings", label: "change settings first", hint: "brain, model, effort, time, browser window" },
+        { value: "stop", label: "stop here" },
+      ],
+    });
+    if (choice !== "settings") return choice as "continue" | "redo" | "stop";
+    await changeSettings(common);
+  }
+}
+
+/** Re-open the run settings mid-pipeline. The next stage picks them up. */
+async function changeSettings(common: CommonArgs) {
+  // clearing these makes the picker actually ask instead of accepting the old answers
+  common.brain = common.model = common.effort = undefined;
+  common.brainResolved = false;
+  await resolveBrain(common, "Which AI for what runs next?");
+
+  const t = await text({
+    message: `Minutes per session (Enter to keep ${common.time ?? 20}):`,
+    fallback: "",
+  });
+  if (/^\d+$/.test(t.trim())) common.time = Math.min(120, Math.max(1, Number(t)));
+
+  common.headless = await select({
+    message: "Browser window?",
+    choices: [
+      { value: common.headless, label: `keep (${common.headless ? "headless" : "visible"})` },
+      { value: !common.headless, label: common.headless ? "visible" : "headless" },
+    ],
+  });
+}
+
 /** PIPELINE — visit → report → fix (pipeline always regenerates: it just made new data) */
+/**
+ * The whole tool for one URL: read -> personas -> visit -> report -> fix,
+ * ending wherever `--stop` says. Interactive runs get a gate between stages.
+ */
 async function all(url: string, common: CommonArgs) {
-  const dirs = await visit(url, common);
-  await report(dirs, true);
+  let dirs: string[];
+  for (;;) {
+    dirs = await visit(url, common);
+    if (!dirs.length || !runsThrough("report", common.stop)) {
+      if (dirs.length) console.log(`\n  Stopped after visit. ${dirs.length} session(s) on disk.\n`);
+      return;
+    }
+    const g = await stageGate(
+      `${dirs.length} session(s) on disk`,
+      "report — aggregate this site's funnel",
+      common,
+    );
+    if (g === "stop") {
+      console.log(`\n  Stopped after visit. ${dirs.length} session(s) on disk.\n`);
+      return;
+    }
+    if (g !== "redo") break;
+  }
+
+  for (;;) {
+    await report(dirs, true);
+    if (!runsThrough("fix", common.stop)) {
+      const sites = [...new Set(loadSessions(dirs).map((x) => siteSlug(x.meta.url)))];
+      console.log(
+        `\n  Stopped after report. See ${sites.map((x) => `runs/${x}/AGGREGATE.md`).join(", ")}.\n`,
+      );
+      return;
+    }
+    const g = await stageGate(
+      "aggregate written",
+      "fix — expert panel over each session",
+      common,
+    );
+    if (g === "stop") {
+      const sites = [...new Set(loadSessions(dirs).map((x) => siteSlug(x.meta.url)))];
+      console.log(
+        `\n  Stopped after report. See ${sites.map((x) => `runs/${x}/AGGREGATE.md`).join(", ")}.\n`,
+      );
+      return;
+    }
+    if (g !== "redo") break;
+  }
+
   // common now carries the resolved brain/model/effort — stage 3 reuses it verbatim
   await fix(dirs, common, true);
+
   const sites = [...new Set(loadSessions(dirs).map((x) => siteSlug(x.meta.url)))];
   console.log(
-    `\n  Pipeline complete: ${dirs.length} session(s). See ${sites
-      .map((x) => `runs/${x}/AGGREGATE.md`)
+    `\n  Done: ${dirs.length} session(s). See ${sites
+      .map((x) => `runs/${x}/SITE.md, runs/${x}/AGGREGATE.md`)
       .join(", ")} + FIXES.md per session.\n`,
   );
 }
@@ -786,18 +1118,129 @@ async function personasGenerate(rest: string[]) {
 }
 
 /** List available personas (built-in + custom YAML) */
+/** Free-text answer with a hard ceiling — a 4,000-word "goal" is not a goal. */
+const limited = (max: number, what: string) => (v: string) => {
+  const t = v.trim();
+  if (!t) return `${what} cannot be empty`;
+  if (t.length > max) return `keep it under ${max} characters (currently ${t.length})`;
+  return undefined;
+};
+
+/**
+ * Build a persona by asking, rather than scaffolding a file to hand-edit.
+ *
+ * Saves either globally or into one site's set, so a persona written for one
+ * product does not turn up on every other site you test.
+ */
+async function newPersonaInteractive(name: string): Promise<void> {
+  heading(`New persona — ${name}`);
+
+  const sites = sitesWithPersonas().map((s) => s.site);
+  const knownSites = [...new Set([...sites, ...(existsSync(RUNS_ROOT) ? readdirSync(RUNS_ROOT) : [])])]
+    .filter((s) => !s.startsWith("."))
+    .sort();
+
+  const scope = await select({
+    message: "Where should it live?",
+    choices: [
+      { value: "", label: "everywhere", hint: "personas/ — offered on every site" },
+      ...knownSites.map((s) => ({
+        value: s,
+        label: `only ${s}`,
+        hint: `runs/${s}/personas/`,
+      })),
+    ],
+  });
+
+  const temperature = await select({
+    message: "How much do they already know when they arrive?",
+    choices: [
+      { value: "cold", label: "cold", hint: "never heard of it — gets no site context at all" },
+      { value: "warm", label: "warm", hint: "knows what they came looking for" },
+      { value: "hot", label: "hot", hint: "already looked up the price and how to sign up" },
+    ],
+  });
+
+  const goal = await text({
+    message: "What did they come to do? (one or two sentences, max 300)",
+    validate: limited(300, "the goal"),
+  });
+
+  const tech = await select({
+    message: "Tech comfort?",
+    choices: [
+      { value: "medium", label: "medium" },
+      { value: "low", label: "low", hint: "put off by code samples and jargon" },
+      { value: "high", label: "high" },
+    ],
+  });
+
+  const patience = await text({
+    message: "How many decisions before they give up? (1-50, Enter for 12)",
+    fallback: "12",
+    validate: (v) =>
+      /^\d+$/.test(v.trim()) && +v >= 1 && +v <= 50 ? undefined : "a number from 1 to 50",
+  });
+
+  console.log(
+    "\n  Traits are the personality lever — short, first-person habits the model copies.",
+  );
+  const traits: string[] = [];
+  for (let i = 1; i <= 6; i++) {
+    const t = await text({
+      message: `  trait ${i}${i > 2 ? " (Enter to finish)" : ""} (max 120 chars):`,
+      fallback: i > 2 ? "" : undefined,
+      validate: (v) =>
+        i > 2 && !v.trim() ? undefined : limited(120, "a trait")(v),
+    });
+    if (!t.trim()) break;
+    traits.push(t.trim());
+  }
+
+  const dir = scope ? resolve(`${RUNS_ROOT}/${scope}/personas`) : PERSONAS_DIR;
+  const id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  mkdirSync(dir, { recursive: true });
+  const path = `${dir}/${id}.yaml`;
+  if (existsSync(path)) {
+    console.error(`\n  ${path} already exists — pick another name.\n`);
+    process.exit(1);
+  }
+
+  writeFileSync(
+    path,
+    `# ${name}${scope ? ` — built for ${scope}` : ""}\n` +
+      `# Edit freely; delete the file to remove.\n\n` +
+      stringifyYaml({
+        name,
+        temperature,
+        goal: goal.trim(),
+        tech_comfort: tech,
+        patience_steps: Number(patience),
+        traits,
+      }) +
+      "\n",
+  );
+
+  console.log(`\n  ✓ ${path}`);
+  console.log(
+    scope
+      ? `  It will be offered automatically when you test ${scope}.\n`
+      : `  Use it anywhere:  client-simulator <url> --persona ${id}\n`,
+  );
+}
+
 function personasCommand(args: string[]) {
   if (args.includes("--new")) {
     const nameIdx = args.indexOf("--new");
     const name = args[nameIdx + 1];
     if (!name || name.startsWith("--")) {
-      console.error("Usage: client-simulator personas --new \"Persona Name\"");
+      console.error("Usage: client-simulator --new-persona \"Persona Name\"");
       process.exit(1);
     }
     try {
       const path = newPersonaFile(name);
       console.log(`\n  ✓ created ${path}`);
-      console.log(`  Edit it, then use: client-simulator visit <url> --persona ${path.split("/").pop()?.replace(/\.yaml$/, "")}\n`);
+      console.log(`  Edit it, then use: client-simulator <url> --persona ${path.split("/").pop()?.replace(/\.yaml$/, "")}\n`);
     } catch (e) {
       console.error((e as Error).message);
       process.exit(1);
@@ -805,21 +1248,44 @@ function personasCommand(args: string[]) {
     return;
   }
 
-  const { personas, errors } = getPersonaRegistry();
-  console.log(`\n  Available personas (--persona <id>):\n`);
-  console.log(`  ${"id".padEnd(22)} name`.padEnd(50) + "temperature  patience");
-  console.log(`  ${"─".repeat(70)}`);
-  for (const [id, p] of Object.entries(personas)) {
-    const custom = PERSONAS[id] ? "" : "  (custom)";
-    console.log(
-      `  ${id.padEnd(22)} ${p.name.padEnd(28)} ${p.temperature.padEnd(11)} ${p.patience_steps}${custom}`,
-    );
+  // grouped by where they live, because a flat list hid site sets entirely and
+  // left you wondering where the personas you just generated had gone
+  const { errors } = getPersonaRegistry();
+  const rows = (personas: Record<string, Persona>) => {
+    for (const [id, p] of Object.entries(personas)) {
+      // ids and names are both user-supplied; truncate so one long one cannot
+      // shunt every other column out of line
+      const fit = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s).padEnd(n);
+      console.log(
+        `    ${fit(id, 32)} ${fit(p.name, 34)} ${p.temperature.padEnd(6)} ${String(p.patience_steps).padStart(2)} steps`,
+      );
+    }
+  };
+
+  console.log(`\n  Personas  (use with --persona <id>)`);
+
+  console.log(`\n  Built in`);
+  rows(PERSONAS);
+
+  const { personas: global } = loadCustomPersonas();
+  if (Object.keys(global).length > 0) {
+    console.log(`\n  Yours — personas/  (available on every site)`);
+    rows(global);
   }
+
+  for (const { site, dir, personas } of sitesWithPersonas()) {
+    console.log(`\n  Built for ${site} — ${dir}/`);
+    rows(personas);
+  }
+
   if (errors.length > 0) {
     console.log(`\n  ⚠ invalid persona files (not loaded):`);
     for (const e of errors) console.log(`    ${e.file}: ${e.error}`);
   }
-  console.log(`\n  Add your own: client-simulator personas --new "My Persona"  →  personas/<id>.yaml\n`);
+  console.log(
+    `\n  New one:  client-simulator --new-persona "My Persona"   (asks a few questions)` +
+      `\n  Or let it build a set for a site:  client-simulator <url> --stop personas\n`,
+  );
 }
 
 /** Normalize whatever the user typed into a fetchable URL. */
@@ -846,11 +1312,10 @@ async function wizard() {
   const action = await select({
     message: "What do you want to do?",
     choices: [
-      { value: "visit", label: "visit", hint: "send synthetic clients through a site" },
-      { value: "all", label: "all", hint: "visit -> report -> fix, one shot" },
-      { value: "report", label: "report", hint: "aggregate past sessions into a funnel" },
-      { value: "fix", label: "fix", hint: "expert panel on a past session" },
-      { value: "personas", label: "personas", hint: "list or generate personas" },
+      { value: "test", label: "test a site", hint: "read it, build prospects, send them, report" },
+      { value: "report", label: "report on past runs", hint: "aggregate sessions into a funnel" },
+      { value: "fix", label: "review a past session", hint: "expert panel -> FIXES.md" },
+      { value: "personas", label: "personas", hint: "list every persona you have" },
       { value: "doctor", label: "doctor", hint: "verify your environment" },
     ],
   });
@@ -858,19 +1323,28 @@ async function wizard() {
   const common: CommonArgs = { headless: false, mobile: false };
 
   switch (action) {
-    case "visit":
-      await visit(await askUrl(), common);
+    case "test": {
+      const url = await askUrl();
+      const stop = await select<Stage | "">({
+        message: "How far should it go?",
+        choices: [
+          { value: "", label: "all the way", hint: "read -> personas -> visit -> report -> panel" },
+          { value: "report", label: "stop after the report", hint: "no expert panel" },
+          { value: "visit", label: "stop after the runs", hint: "no report, no panel" },
+          { value: "personas", label: "just read it and build prospects", hint: "nobody visits yet" },
+        ],
+      });
+      if (stop) common.stop = stop;
+      await all(url, common);
       break;
-    case "all":
-      await all(await askUrl(), common);
-      break;
+    }
     case "report":
       await report(undefined, false);
       break;
     case "fix": {
       const dirs = findSessionDirs();
       if (dirs.length === 0) {
-        console.error("\n  No sessions to review yet — run a visit first.\n");
+        console.error("\n  No sessions to review yet — test a site first.\n");
         process.exit(1);
       }
       const dir = await select({
@@ -883,18 +1357,9 @@ async function wizard() {
       await fix([dir], common, false);
       break;
     }
-    case "personas": {
-      const sub = await select({
-        message: "Personas:",
-        choices: [
-          { value: "list", label: "list", hint: "show built-in + custom" },
-          { value: "generate", label: "generate", hint: "AI-build a persona graph" },
-        ],
-      });
-      if (sub === "list") personasCommand([]);
-      else await personasGenerate([]);
+    case "personas":
+      personasCommand([]);
       break;
-    }
     case "doctor": {
       const choice = await resolveBrainChoice({}, "Which AI should I health-check?", {
         requireInstalled: false,
@@ -905,59 +1370,138 @@ async function wizard() {
   }
 }
 
+const VALUE_FLAGS = new Set([
+  "--persona",
+  "--personas",
+  "--brain",
+  "--runs",
+  "--time",
+  "--flow",
+  "--model",
+  "--effort",
+  "--stop",
+  "--new-persona",
+  "--from",
+  "--site",
+  "--count",
+]);
+
+/** Everything that is not a flag or a flag's value. */
+function positionalsOf(argv: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i].startsWith("-")) {
+      if (VALUE_FLAGS.has(argv[i])) i++;
+      continue;
+    }
+    out.push(argv[i]);
+  }
+  return out;
+}
+
+function flagValue(argv: string[], flag: string): string | undefined {
+  const i = argv.indexOf(flag);
+  return i === -1 ? undefined : argv[i + 1];
+}
+
+/** Subcommands from before the single-command surface. Still dispatch; not in --help. */
+const LEGACY = new Set(["visit", "report", "fix", "all", "doctor", "personas", "mailtest"]);
+
 async function main() {
   loadDotEnv();
-  const [command, ...rest] = process.argv.slice(2);
+  const argv = process.argv.slice(2);
 
-  if (!command) {
+  if (argv.length === 0) {
     await wizard();
     return;
   }
-  if (command === "-h" || command === "--help") {
+  if (argv.includes("-h") || argv.includes("--help")) {
     printUsage();
     process.exit(0);
   }
 
-  const positionals: string[] = [];
-  const VALUE_FLAGS = new Set(["--persona", "--personas", "--brain", "--runs", "--model", "--effort"]);
-  for (let i = 0; i < rest.length; i++) {
-    if (rest[i].startsWith("--")) {
-      if (VALUE_FLAGS.has(rest[i])) i++; // skip this flag's value
-      continue;
-    }
-    positionals.push(rest[i]);
+  // legacy subcommand form, kept so nothing anyone typed before breaks
+  if (LEGACY.has(argv[0])) {
+    await legacy(argv[0], argv.slice(1));
+    return;
   }
 
+  const common = parseCommon(argv);
+  const force = argv.includes("--force");
+  const positionals = positionalsOf(argv);
+
+  // standalone modes — each ends the run
+  if (argv.includes("--doctor")) {
+    const choice = await resolveBrainChoice(
+      { brain: common.brain, model: common.model, effort: common.effort },
+      "Which AI should I health-check?",
+      { requireInstalled: false },
+    );
+    if (!(await runDoctor(choice.brain, force))) process.exitCode = 1;
+    return;
+  }
+  if (argv.includes("--mailtest")) return void (await mailtest());
+  if (argv.includes("--list-personas")) return personasCommand([]);
+  if (argv.includes("--new-persona")) {
+    const name = flagValue(argv, "--new-persona");
+    if (!name) {
+      console.error('--new-persona needs a name, e.g. --new-persona "Budget Bianca"');
+      process.exit(1);
+    }
+    return void (isInteractive()
+      ? await newPersonaInteractive(name)
+      : personasCommand(["--new", name]));
+  }
+  if (argv.includes("--fix")) {
+    const dirs = positionals.length ? positionals : findSessionDirs();
+    if (!dirs.length) {
+      console.error("\n  No sessions to review yet — run a visit first.\n");
+      process.exit(1);
+    }
+    return void (await fix(dirs, common, force));
+  }
+  if (argv.includes("--report")) {
+    return void (await report(positionals.length ? positionals : undefined, force));
+  }
+
+  const url = positionals[0];
+  if (!url) {
+    console.error("Give me a URL: client-simulator <url>. See --help.");
+    process.exit(1);
+  }
+  await all(normalizeUrl(url), common);
+}
+
+function normalizeUrl(raw: string): string {
+  return /^https?:\/\//.test(raw) ? raw : `https://${raw}`;
+}
+
+/** Pre-single-command dispatch. Undocumented, unchanged in behaviour. */
+async function legacy(command: string, rest: string[]) {
   const common = parseCommon(rest);
+  const force = rest.includes("--force");
+  const positionals = positionalsOf(rest);
+  const needUrl = (usage: string) => {
+    if (!positionals[0]) {
+      console.error(usage);
+      process.exit(1);
+    }
+    return normalizeUrl(positionals[0]);
+  };
 
   switch (command) {
-    case "visit": {
-      const url = positionals[0];
-      if (!url) {
-        console.error("Usage: client-simulator visit <url> [--persona cold,warm,hot]");
-        process.exit(1);
-      }
-      await visit(url, common);
+    case "visit":
+      await visit(needUrl("Usage: client-simulator <url> [--persona cold,warm,hot]"), common);
       break;
-    }
+    case "all":
+      await all(needUrl("Usage: client-simulator <url> [--persona cold,warm,hot]"), common);
+      break;
     case "report":
-      await report(
-        positionals.length ? positionals : undefined,
-        rest.includes("--force"),
-      );
+      await report(positionals.length ? positionals : undefined, force);
       break;
     case "fix":
-      await fix(positionals, common, rest.includes("--force"));
+      await fix(positionals, common, force);
       break;
-    case "all": {
-      const url = positionals[0];
-      if (!url) {
-        console.error("Usage: client-simulator all <url> [--persona cold,warm,hot]");
-        process.exit(1);
-      }
-      await all(url, common);
-      break;
-    }
     case "mailtest":
       await mailtest();
       break;
@@ -967,20 +1511,12 @@ async function main() {
         "Which AI should I health-check?",
         { requireInstalled: false },
       );
-      if (!(await runDoctor(choice.brain, rest.includes("--force")))) process.exitCode = 1;
+      if (!(await runDoctor(choice.brain, force))) process.exitCode = 1;
       break;
     }
-    case "personas": {
-      if (rest[0] === "generate") {
-        await personasGenerate(rest.slice(1));
-      } else {
-        personasCommand(rest);
-      }
-      break;
-    }
-    default:
-      // legacy style: client-simulator <url> ...
-      await visit([command, ...positionals][0], common);
+    case "personas":
+      if (rest[0] === "generate") await personasGenerate(rest.slice(1));
+      else personasCommand(rest);
       break;
   }
 }

@@ -15,12 +15,13 @@ function session(opts: {
   exit: Record<string, unknown>;
   steps?: { url: string; confusion: number; thought: string }[];
   url?: string;
+  flow?: unknown;
 }): string {
   const dir = join(scratch, `s${n++}-${opts.personaId}`);
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, "meta.json"),
-    JSON.stringify({ url: opts.url ?? "https://site.com", personaId: opts.personaId, brain: "claude", exit: opts.exit }),
+    JSON.stringify({ url: opts.url ?? "https://site.com", personaId: opts.personaId, brain: "claude", exit: opts.exit, flow: opts.flow }),
   );
   const steps = opts.steps ?? [{ url: "https://site.com/", confusion: 3, thought: "ok" }];
   writeFileSync(
@@ -110,7 +111,7 @@ describe("generateAggregate", () => {
     const out = generateAggregate([
       session({ personaId: "cold", exit: { kind: "abandoned", reason: "pricing was hidden", question: "cost?" } }),
     ]);
-    assert.match(out, /Why They Left/);
+    assert.match(out, /What could make people leave/);
     assert.match(out, /pricing was hidden/);
   });
 
@@ -121,16 +122,44 @@ describe("generateAggregate", () => {
       steps: [{ url, confusion: 8, thought: "t" }],
     });
     const out = generateAggregate([at("https://site.com/pricing"), at("https://site.com/pricing"), at("https://site.com/signup")]);
-    assert.match(out, /Most Common Drop Points/);
-    assert.match(out, /\/pricing` — 2 persona/);
+    assert.match(out, /most likely to stall/);
+    assert.match(out, /\/pricing` — 2 of 3/);
   });
 
   it("does not report drop points for sessions that completed", () => {
     const out = generateAggregate([
       session({ personaId: "hot", exit: { kind: "completed", summary: "done" } }),
     ]);
-    assert.ok(!out.includes("Most Common Drop Points"));
-    assert.ok(!out.includes("Why They Left"));
+    assert.ok(!out.includes("most likely to stall"));
+    assert.ok(!out.includes("What could make people leave"));
+  });
+
+  it("renders the flow funnel across scored sessions and skips it when nobody was scored", () => {
+    const cp = (reached1: boolean, reached2: boolean) => [
+      { checkpoint: "found signup", reached: reached1, note: "" },
+      { checkpoint: "saw dashboard", reached: reached2, note: "" },
+    ];
+    const out = generateAggregate([
+      session({ personaId: "cold", exit: { kind: "completed", summary: "d" }, flow: cp(true, true) }),
+      session({ personaId: "warm", exit: { kind: "abandoned", reason: "r", question: "q" }, flow: cp(true, false) }),
+    ]);
+    assert.match(out, /Flow Funnel \(2 scored/);
+    assert.match(out, /found signup \| 2\/2/);
+    assert.match(out, /saw dashboard \| 1\/2/);
+    assert.match(out, /never got here/);
+
+    const none = generateAggregate([
+      session({ personaId: "cold", exit: { kind: "completed", summary: "d" } }),
+    ]);
+    assert.ok(!none.includes("Flow Funnel"));
+  });
+
+  it("a malformed flow field degrades to unscored instead of discarding the session", () => {
+    const out = generateAggregate([
+      session({ personaId: "cold", exit: { kind: "completed", summary: "d" }, flow: "garbage" }),
+    ]);
+    assert.match(out, /\*\*Sessions:\*\* 1/);
+    assert.ok(!out.includes("Flow Funnel"));
   });
 
   it("escapes pipes so a quote cannot break the markdown table", () => {

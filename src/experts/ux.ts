@@ -1,5 +1,5 @@
 import type { Expert, ExpertContext } from "./types.js";
-import { exitSummary, trailSummary } from "./types.js";
+import { exitSummary, trailSummary, siteContext } from "./types.js";
 import { parseJsonObject } from "./copywriter.js";
 
 export const uxExpert: Expert = {
@@ -12,6 +12,7 @@ export const uxExpert: Expert = {
 Apply the installed web-design-reviewer, landing-page-conversion-audit, and critique-information-density skills (UX heuristics, conversion frameworks, content-length/overload review) if available.
 ${ctx.viewport === "mobile" ? "This session ran on a MOBILE viewport (390×844, touch) — judge mobile layout, tap targets, and content length on small screens." : "This session ran on a desktop viewport (1280×800)."}
 
+${siteContext(ctx)}
 Persona: ${ctx.persona.name} (${ctx.persona.temperature}, tech comfort: ${ctx.persona.tech_comfort})
 Goal: ${ctx.persona.goal}
 Outcome: ${exitSummary(ctx.exit)}
