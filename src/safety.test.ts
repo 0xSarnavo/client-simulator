@@ -288,3 +288,39 @@ describe("actions with no target are never blocked", () => {
     for (const a of actions) assert.equal(blockedAction(a, aria), null, a.type);
   });
 });
+
+describe("blocked: booking commits — a real person would attend that meeting", () => {
+  const btn2 = (label: string) => `- button "${label}" [ref=e40]`;
+
+  it("refuses the scheduler commit buttons wherever they appear", () => {
+    for (const label of ["Schedule Event", "Confirm meeting", "Book this slot", "Book now", "Schedule call"]) {
+      assert.match(String(blockedAction(click("e40"), btn2(label))), /booking a meeting/, label);
+    }
+  });
+
+  it("refuses a bare Confirm only in scheduler context", () => {
+    // cal.com labels its commit just "Confirm" — the URL is the context
+    assert.match(
+      String(blockedAction(click("e40"), btn2("Confirm"), "https://cal.com/team/amulet/demo")),
+      /booking a meeting/,
+    );
+    // page chrome counts too, even off a known booking domain
+    assert.match(
+      String(blockedAction(click("e40"), `- text "Time zone: Asia/Kolkata"\n${btn2("Confirm")}`)),
+      /booking a meeting/,
+    );
+    // an OTP screen's Confirm stays usable — refusing it broke mail flows once before
+    assert.equal(blockedAction(click("e40"), btn2("Confirm"), "https://app.example.com/verify"), null);
+  });
+
+  it("still lets a persona reach the scheduler — the wall is the finding", () => {
+    for (const label of ["Book a demo", "Request access", "Schedule a demo with sales"]) {
+      assert.equal(blockedAction(click("e40"), btn2(label)), null, `blocked ${label}`);
+    }
+    // filling the booking form is looking, not committing
+    assert.equal(
+      blockedAction(type("e40", "Sophia Lee"), '- textbox "Your name" [ref=e40]', "https://cal.com/x"),
+      null,
+    );
+  });
+});

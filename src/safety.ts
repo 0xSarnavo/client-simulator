@@ -111,6 +111,33 @@ const PAYMENT_CONTROL = new RegExp(
   "i",
 );
 
+/**
+ * Controls that put a real meeting on a real person's calendar. Two sessions
+ * booked actual cal.com demos with the site's founder before this existed —
+ * confirmation emails, calendar invites, a human preparing for a fake call.
+ * Deliberately narrow, like PAYMENT_CONTROL: "Book a demo" merely OPENS a
+ * scheduler and stays clickable (seeing the demo-gate is the finding); picking
+ * a slot and filling the form are looking; only the commit is refused.
+ */
+const BOOKING_COMMIT = new RegExp(
+  [
+    "\\bschedule (event|meeting|call)\\b", // Calendly's commit
+    "\\bconfirm (meeting|booking|appointment|call|event)\\b",
+    "\\bbook (meeting|appointment|this (slot|time|meeting|call))\\b",
+    "\\bbook now\\b",
+  ].join("|"),
+  "i",
+);
+
+/**
+ * cal.com's commit button is labelled just "Confirm", which is far too common a
+ * label to refuse everywhere — it is the standard button on OTP screens. It is
+ * refused only when the surroundings say scheduler: the booking URL or the
+ * page's own branding/timezone chrome.
+ */
+const BARE_CONFIRM = /^(confirm|schedule|book)$/i;
+const SCHEDULER_CONTEXT = /calendly|cal\.com|savvycal|chili ?piper|hubspot meetings|\btime ?zone\b/i;
+
 /** Field labels that mean card data. */
 /**
  * Narrow on purpose. "Security code", "expiry" and friends were here and blocked
@@ -245,7 +272,11 @@ function variants(label: string): string[] {
  * The persona is told the reason and can route around it or walk out — which is
  * itself a finding worth recording.
  */
-export function blockedAction(action: DecisionAction, ariaYaml: string): string | null {
+export function blockedAction(
+  action: DecisionAction,
+  ariaYaml: string,
+  url?: string,
+): string | null {
   if (action.type === "click" || action.type === "select" || action.type === "type") {
     // fail closed: any candidate label, in any reading, blocks the action
     const labels = targetLabels(ariaYaml, action.target).flatMap(variants);
@@ -263,6 +294,12 @@ export function blockedAction(action: DecisionAction, ariaYaml: string): string 
       const pay = match(PAYMENT_CONTROL);
       if (pay) {
         return `refused to complete a payment ("${pay}") — this client never pays`;
+      }
+      const book =
+        match(BOOKING_COMMIT) ??
+        (SCHEDULER_CONTEXT.test(`${url ?? ""}\n${ariaYaml}`) ? match(BARE_CONFIRM) : undefined);
+      if (book) {
+        return `refused to finish booking a meeting ("${book}") — this client never puts real events on a real calendar. Looking at the scheduler was the finding; describe it and move on`;
       }
     }
   }

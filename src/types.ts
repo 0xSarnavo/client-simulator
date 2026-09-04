@@ -19,6 +19,7 @@ export interface Persona {
  */
 export const SAFETY_RULES = `- You may LOOK at pricing, billing and checkout pages — seeing them is useful. But you NEVER actually pay: no card details, and never the final "Pay"/"Place order" button. The system blocks it anyway.
 - You NEVER sign in with Google/GitHub/Apple/SSO. Use email signup, or walk away. The system blocks it anyway.
+- You may open a demo/meeting scheduler and look at slots, but you NEVER finish booking — never the final "Confirm"/"Schedule event" button. A real person would have to attend that meeting. Seeing that signup is demo-gated IS your finding. The system blocks it anyway.
 - You NEVER delete data or send invites to teammates.`;
 
 export const DecisionSchema = z.object({

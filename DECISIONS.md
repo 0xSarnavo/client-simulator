@@ -23,6 +23,30 @@ mechanical work. If you cannot fill in **Why**, there is no entry to write.
 
 ---
 
+## 2026-09-04 — Booking commits join payment and SSO in the action guard
+
+**Decided:** `blockedAction` refuses scheduler commit controls — "Schedule
+Event", "Confirm meeting", "Book this slot", "Book now" — and a bare
+"Confirm"/"Schedule"/"Book" when the URL or the snapshot says scheduler
+(cal.com, Calendly, SavvyCal, Chili Piper, timezone chrome). `blockedAction`
+gained an optional `url` parameter for that context. Openers ("Book a demo",
+"Request access") stay clickable and the booking form stays fillable — only
+the commit is refused, mirroring how checkout is handled.
+
+**Why:** not hypothetical. During the model sweep, two sessions on amulet.so
+completed real cal.com bookings — "Amulet Discovery 20m", a real founder's
+calendar, a fake name, an ephemeral email. The demo-gate was already the
+finding by the time the calendar loaded; finishing the booking added nothing
+to the report and put a meeting on a human's schedule.
+
+**Rejected:** blocking bare "Confirm" everywhere. It is the standard button on
+OTP screens, and refusing it would break the mail flow the same way blocking
+"Security code" once did — hence the scheduler-context gate.
+
+**Files:** `src/safety.ts`, `src/session.ts`, `src/types.ts`, `AGENTS.md`
+
+**Ref:** uncommitted
+
 ## 2026-09-04 — One malformed persona no longer discards the generated set
 
 **Decided:** persona generation validates per element: bad entries are dropped
