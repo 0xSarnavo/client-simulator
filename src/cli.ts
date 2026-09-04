@@ -295,6 +295,21 @@ function runsThrough(stage: Stage, stop?: Stage): boolean {
   return !stop || STAGES.indexOf(stage) <= STAGES.indexOf(stop);
 }
 
+/** A 24-wide ASCII progress bar: `[#########---------------] 3/8 label`. */
+function progressBar(done: number, total: number, label = ""): string {
+  const w = 24;
+  const filled = total > 0 ? Math.round((done / total) * w) : 0;
+  return `  [${"#".repeat(filled)}${"-".repeat(w - filled)}] ${done}/${total}${label ? ` ${label}` : ""}`;
+}
+
+/** `▸ stage 3/5 · visit` — where we are in the pipeline for this site. */
+function stageBanner(stage: Stage, stop?: Stage): void {
+  const active = STAGES.filter((s) => runsThrough(s, stop));
+  const i = active.indexOf(stage);
+  if (i === -1) return;
+  console.log(`\n▸ stage ${i + 1}/${active.length} · ${stage}`);
+}
+
 /**
  * Make sure `runs/<site>/SITE.md` exists before anyone is sent in.
  *
@@ -546,6 +561,7 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
 
   // the brief comes first, and comes even when --persona was passed: it is the
   // ICP the persona set is built from, and the prior knowledge warm/hot arrive with
+  stageBanner("site", common.stop);
   await prepareSite(url, common, planningBrain);
   const blocked = blockedReason(url);
   if (blocked) {
@@ -560,6 +576,7 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
     return [];
   }
 
+  stageBanner("personas", common.stop);
   const generated = common.personas?.length
     ? []
     : await prepareSitePersonas(url, common, planningBrain, flow);
@@ -595,9 +612,11 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
   // Each session already has its own browser, brain, mailbox and directory;
   // sharing any of those across personas is the bug 646556a fixed.
   const parallel = personaIds.length > 1;
+  stageBanner("visit", common.stop);
   console.log(
-    `\n  ${personaIds.length} prospect(s) ${parallel ? "going in together" : "queued"}: ${personaIds.join(", ")} | ${describeRun(common)}\n`,
+    `  ${personaIds.length} prospect(s) ${parallel ? "going in together" : "queued"}: ${personaIds.join(", ")} | ${describeRun(common)}`,
   );
+  console.log(progressBar(0, personaIds.length, "agents finished") + "\n");
 
   // dirs are minted before anyone launches: sessionPath's same-second suffix
   // check is exists-then-create, which two concurrent starts would race
@@ -730,6 +749,8 @@ function printSessionSummary(
   if (exit.kind === "completed") console.log(`  ${exit.summary}`);
   if (exit.kind === "guardrail") console.log(`  ${exit.detail}`);
   console.log(`  Session: ${sessionDir}`);
+  // running tally — with concurrent agents this is the one honest progress line
+  console.log(progressBar(n, total, "agents finished"));
 }
 
 /**
@@ -840,6 +861,7 @@ async function fix(dirs: string[], common: CommonArgs, force = false) {
       `\n  Expert panel: ${persona.name} @ ${s.meta.url} (${s.events.length} steps)`,
     );
     console.log(`  Experts (in parallel): ${EXPERTS.map((e) => e.id).join(", ")}`);
+    let panelDone = 0;
 
     const briefText = loadBrief(s.meta.url) ?? undefined;
     // the experts are independent — each its own brain, each returns one
@@ -870,7 +892,9 @@ async function fix(dirs: string[], common: CommonArgs, force = false) {
             console.log(`  [${expert.id}] failed: ${(e as Error).message.split("\n")[0]}`);
             return null;
           });
-        console.log(`  [${expert.id}] ${section ? "done" : "skipped"}`);
+        console.log(
+          `  [${expert.id}] ${section ? "done" : "skipped"}  ${progressBar(++panelDone, EXPERTS.length, "experts").trim()}`,
+        );
         return section ? `## ${expert.title} — ${expert.id}\n\n${section}` : null;
       }),
     );
@@ -958,6 +982,7 @@ async function all(url: string, common: CommonArgs) {
   }
 
   for (;;) {
+    stageBanner("report", common.stop);
     await report(dirs, true);
     if (!runsThrough("fix", common.stop)) {
       const sites = [...new Set(loadSessions(dirs).map((x) => siteSlug(x.meta.url)))];
@@ -982,6 +1007,7 @@ async function all(url: string, common: CommonArgs) {
   }
 
   // common now carries the resolved brain/model/effort — stage 3 reuses it verbatim
+  stageBanner("fix", common.stop);
   await fix(dirs, common, true);
 
   const sites = [...new Set(loadSessions(dirs).map((x) => siteSlug(x.meta.url)))];
