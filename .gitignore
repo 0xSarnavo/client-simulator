@@ -5,6 +5,7 @@ personas/
 LOCAL-SETUP.md
 PIVOT.md
 scripts/neatlogs-upload.mjs
+scripts/sweep.sh
 package-lock.json
 .DS_Store
 .env
