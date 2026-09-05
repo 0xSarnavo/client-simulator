@@ -3,6 +3,13 @@ import type { BrainRole } from "../roles.js";
 
 interface ClaudeJsonOutput {
   result?: string;
+  total_cost_usd?: number;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
 }
 
 /**
@@ -56,6 +63,21 @@ export function createClaudeBrain(role: BrainRole = "persona") {
         // fall through to raw stdout
       }
       return stdout;
+    },
+    extractUsage: (stdout) => {
+      try {
+        const p = JSON.parse(stdout) as ClaudeJsonOutput;
+        if (!p.usage) return null;
+        return {
+          inputTokens: p.usage.input_tokens ?? 0,
+          outputTokens: p.usage.output_tokens ?? 0,
+          cacheReadTokens: p.usage.cache_read_input_tokens ?? 0,
+          cacheCreateTokens: p.usage.cache_creation_input_tokens ?? 0,
+          costUsd: p.total_cost_usd ?? 0,
+        };
+      } catch {
+        return null;
+      }
     },
   });
 }
