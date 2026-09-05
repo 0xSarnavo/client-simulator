@@ -42,6 +42,8 @@ export interface CliBrainOptions {
   args: (prompt: string, o: CliCallOptions) => string[];
   /** Extract the assistant text from the CLI's raw stdout */
   extractText: (stdout: string) => string;
+  /** Pull token/cost figures from the CLI's raw stdout, when it reports them */
+  extractUsage?: (stdout: string) => Partial<BrainUsage> | null;
   timeoutMs?: number;
   /** Model override passed to the CLI (e.g. "opus", "gpt-5.2") */
   model?: string;
@@ -65,12 +67,33 @@ export interface CliCallOptions {
   allowDir?: string;
 }
 
+/**
+ * What a session cost. Tokens are self-reported by the CLI (claude does; opencode
+ * does not — `reported` stays false and the eval falls back to steps/wall-clock).
+ * costUsd is the CLI's OWN figure, not a price calc of ours.
+ */
+export interface BrainUsage {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreateTokens: number;
+  costUsd: number;
+  reported: boolean;
+}
+
+export function emptyUsage(): BrainUsage {
+  return { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0, costUsd: 0, reported: false };
+}
+
 export function makeCliBrain(opts: CliBrainOptions): Brain & {
   ask(prompt: string): Promise<string>;
   model?: string;
 } {
+  const usage = emptyUsage();
   const self = {
     name: opts.name,
+    usage,
     model: opts.model,
     effort: opts.effort,
     allowDir: opts.allowDir,
@@ -137,6 +160,18 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
       throw new Error(
         `${opts.name} CLI failed: ${result.stderr || result.shortMessage}`,
       );
+    }
+
+    // every attempt counts, retries included — that is the point of `calls`
+    usage.calls++;
+    const reported = opts.extractUsage?.(result.stdout);
+    if (reported) {
+      usage.reported = true;
+      usage.inputTokens += reported.inputTokens ?? 0;
+      usage.outputTokens += reported.outputTokens ?? 0;
+      usage.cacheReadTokens += reported.cacheReadTokens ?? 0;
+      usage.cacheCreateTokens += reported.cacheCreateTokens ?? 0;
+      usage.costUsd += reported.costUsd ?? 0;
     }
 
     return opts.extractText(result.stdout);
