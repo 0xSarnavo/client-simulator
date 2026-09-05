@@ -16,7 +16,7 @@ import {
 import { generatePersonas } from "./persona/generate.js";
 import { stringify as stringifyYaml } from "yaml";
 import { runSession } from "./session.js";
-import { generateReport } from "./log/report.js";
+import { generateReport, journeySeconds } from "./log/report.js";
 import { generateAggregate, loadSessions } from "./log/aggregate.js";
 import { RUNS_ROOT, dirLabel, findSessionDirs, sessionPath, siteSlug } from "./runs.js";
 import { EXPERTS } from "./experts/index.js";
@@ -702,6 +702,11 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
             exit,
             viewport: common.mobile ? "mobile" : "desktop",
             flow: flowScore,
+            // claude reports tokens/cost; opencode does not, so the eval also
+            // has steps + wall-clock as a model-agnostic efficiency proxy
+            usage: (brain as { usage?: unknown }).usage ?? null,
+            steps: events.length,
+            durationSeconds: journeySeconds(events),
           },
           null,
           2,
