@@ -203,6 +203,9 @@ HOW IT RUNS:
                               on mail and pauses is excluded — slow mail is not
                               the site's fault)
   --headless                  no visible browser window
+  --serial | --parallel       queued personas one at a time (default) or all at
+                              once — parallel needs a machine that can hold one
+                              browser + AI CLI per persona; omit both and it asks
   --mobile                    phone viewport (390x844, touch) instead of desktop
   --yes                       never prompt; take the default for every question
 
@@ -244,6 +247,10 @@ interface CommonArgs {
   plan?: boolean;
   /** set once the picker has run, so chained stages never ask twice */
   brainResolved?: boolean;
+  /** run queued personas concurrently; undefined asks (serial by default) */
+  parallel?: boolean;
+  /** personas to generate for the site (2-10); undefined asks, default 10 */
+  count?: number;
   /** never prompt — take the default for every question */
   yes?: boolean;
   /** last stage to run; undefined means all three */
@@ -275,6 +282,14 @@ function parseCommon(argv: string[]): CommonArgs {
       args.time = t;
     }
     else if (a === "--flow") args.flow = value(++i, a);
+    else if (a === "--count") {
+      const c = parseInt(value(++i, a), 10);
+      if (!Number.isFinite(c) || c < 2 || c > 10) {
+        console.error(`--count takes 2 to 10 personas. Got "${argv[i]}".`);
+        process.exit(1);
+      }
+      args.count = c;
+    }
     else if (a === "--brain") args.brain = value(++i, a);
     else if (a === "--model") args.model = value(++i, a);
     else if (a === "--effort") args.effort = value(++i, a);
@@ -285,7 +300,9 @@ function parseCommon(argv: string[]): CommonArgs {
         process.exit(1);
       }
       args.stop = s as Stage;
-    } else if (a === "--headless") args.headless = true;
+    } else if (a === "--parallel") args.parallel = true;
+    else if (a === "--serial") args.parallel = false;
+    else if (a === "--headless") args.headless = true;
     else if (a === "--mobile") args.mobile = true;
     else if (a === "--plan") args.plan = true;
     else if (a === "--yes" || a === "-y") args.yes = true;
@@ -447,8 +464,8 @@ async function prepareSitePersonas(
 
   if (existing.length > 0 && !common.plan) return existing;
 
-  let count = 10;
-  if (!common.yes && isInteractive()) {
+  let count = common.count ?? 10;
+  if (common.count === undefined && !common.yes && isInteractive()) {
     const answer = await text({
       message: "How many personas should I build for this site? (2-10, Enter for 10, 0 to skip):",
       fallback: "10",
@@ -611,13 +628,27 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
     );
   }
 
-  // Everyone runs at once — the queue (≤ MAX_RUNS) is the concurrency cap.
-  // Each session already has its own browser, brain, mailbox and directory;
-  // sharing any of those across personas is the bug 646556a fixed.
-  const parallel = personaIds.length > 1;
+  // Serial by default — a browser + AI CLI per persona is heavy enough that
+  // running the queue concurrently makes laptops unresponsive. --parallel
+  // opts back in for machines that can take it. Each session gets its own
+  // browser, brain, mailbox and directory either way; sharing any of those
+  // across personas is the bug 646556a fixed.
+  const tagged = personaIds.length > 1;
   stageBanner("visit", common.stop);
+  const parallel =
+    tagged &&
+    (common.parallel ??
+      (common.yes
+        ? false
+        : await select({
+            message: `How should the ${personaIds.length} sessions run?`,
+            choices: [
+              { label: "one at a time", value: false, hint: "gentle on the machine" },
+              { label: "all at once", value: true, hint: `${personaIds.length} browsers + brains — needs a strong machine` },
+            ],
+          })));
   console.log(
-    `  ${personaIds.length} prospect(s) ${parallel ? "going in together" : "queued"}: ${personaIds.join(", ")} | ${describeRun(common)}`,
+    `  ${personaIds.length} prospect(s) ${parallel ? "going in together" : "queued, one at a time"}: ${personaIds.join(", ")} | ${describeRun(common)}`,
   );
   console.log(progressBar(0, personaIds.length, "agents finished") + "\n");
 
@@ -632,7 +663,7 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
   let done = 0;
   const runOne = async ({ pid, sessionDir, n }: (typeof runs)[number]) => {
     const persona: Persona = registry.personas[pid];
-    const tag = parallel ? pid : undefined;
+    const tag = tagged ? pid : undefined;
 
     // one provider per agent — an IMAP connection is stateful, and concurrent
     // polls through a shared one interleave on a single socket

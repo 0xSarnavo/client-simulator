@@ -10,8 +10,7 @@
   "files": [
     "dist",
     "!dist/**/*.test.js",
-    "README.md",
-    "AGENTS.md"
+    "README.md"
   ],
   "scripts": {
     "build": "tsc",
