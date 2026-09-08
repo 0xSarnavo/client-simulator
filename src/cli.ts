@@ -211,6 +211,7 @@ HOW IT RUNS:
 
 ON ITS OWN:
   --report [dirs...]          aggregate past sessions into a funnel
+  --replication [dirs...]     element refs cited across sessions: replicated vs single-source
                               add --by-model for a funnel per model too
   --fix <dirs...>             expert panel over past sessions -> FIXES.md
   --pdf [sites...]            one shareable PDF per site (funnel + all fixes)
@@ -745,6 +746,7 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
       );
       dirs.push(sessionDir);
 
+      printPerCallUsage((brain as { usage?: unknown }).usage);
       printSessionSummary(exit, events, sessionDir, ++done, personaIds.length);
     } catch (e) {
       // a setup failure (mailbox, browser launch) must not kill the other runs
@@ -768,6 +770,34 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
   if (parallel) await Promise.all(runs.map(runOne));
   else for (const r of runs) await runOne(r);
   return dirs;
+}
+
+/**
+ * Per-call cache behaviour, printed when the CLI reported usage. This is the
+ * measurement PIVOT's step 1 asks for: writes high on EVERY call means the
+ * prompt prefix keeps breaking (fix prompt.ts); writes tracking each new page
+ * snapshot means the growth is legitimate (fix prune.ts). Raw tokens only —
+ * subscription and API runs spend the same tokens at different prices, so
+ * pricing stays downstream.
+ */
+function printPerCallUsage(usage: unknown): void {
+  const u = usage as {
+    reported?: boolean;
+    perCall?: { n: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreateTokens: number; ms: number }[];
+  } | null;
+  if (!u?.reported || !u.perCall?.length) return;
+  const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  console.log("\n  call  cacheW   cacheR    in    out     ms");
+  for (const c of u.perCall) {
+    console.log(
+      `  ${String(c.n).padStart(4)}  ${k(c.cacheCreateTokens).padStart(6)}  ${k(c.cacheReadTokens).padStart(7)}  ${k(c.inputTokens).padStart(4)}  ${k(c.outputTokens).padStart(5)}  ${String(c.ms).padStart(5)}`,
+    );
+  }
+  const sum = (f: (c: { cacheCreateTokens: number; cacheReadTokens: number; inputTokens: number; outputTokens: number }) => number) =>
+    u.perCall!.reduce((a, c) => a + f(c), 0);
+  console.log(
+    `   sum  ${k(sum((c) => c.cacheCreateTokens)).padStart(6)}  ${k(sum((c) => c.cacheReadTokens)).padStart(7)}  ${k(sum((c) => c.inputTokens)).padStart(4)}  ${k(sum((c) => c.outputTokens)).padStart(5)}`,
+  );
 }
 
 function printSessionSummary(
@@ -1593,6 +1623,21 @@ async function main() {
   }
   if (argv.includes("--report")) {
     return void (await report(positionals.length ? positionals : undefined, force, argv.includes("--by-model")));
+  }
+  if (argv.includes("--replication")) {
+    const { collectSightings, replicationTable, renderReplication } = await import("./log/replication.js");
+    const dirs = positionals.length ? positionals : findSessionDirs();
+    if (!dirs.length) {
+      console.error("\n  No sessions to analyse yet — run a visit first.\n");
+      process.exit(1);
+    }
+    const rows = replicationTable(collectSightings(dirs));
+    if (!rows.length) {
+      console.log("\n  No element refs cited in any FIXES.md or session trail.\n");
+      return;
+    }
+    console.log("\n" + renderReplication(rows));
+    return;
   }
   if (argv.includes("--pdf")) {
     return void (await pdf(positionals));

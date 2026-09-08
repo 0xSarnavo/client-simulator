@@ -68,9 +68,28 @@ export interface CliCallOptions {
 }
 
 /**
+ * One CLI call's own figures, recorded raw. Raw token counts are the invariant:
+ * a subscription run and an API run spend the same tokens at different prices,
+ * so pricing is always derived downstream from these counts — never baked in
+ * here. costUsd is the CLI's OWN per-call figure (claude prints list-price
+ * equivalent even on subscription), kept as reported data, not as our pricing.
+ */
+export interface BrainCallRecord {
+  n: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreateTokens: number;
+  costUsd: number;
+  ms: number;
+}
+
+/**
  * What a session cost. Tokens are self-reported by the CLI (claude does; opencode
  * does not — `reported` stays false and the eval falls back to steps/wall-clock).
- * costUsd is the CLI's OWN figure, not a price calc of ours.
+ * costUsd is the CLI's OWN figure, not a price calc of ours. perCall holds one
+ * record per CLI call (retries included), so cache behaviour is measurable
+ * per step instead of only as a run total.
  */
 export interface BrainUsage {
   calls: number;
@@ -80,10 +99,11 @@ export interface BrainUsage {
   cacheCreateTokens: number;
   costUsd: number;
   reported: boolean;
+  perCall: BrainCallRecord[];
 }
 
 export function emptyUsage(): BrainUsage {
-  return { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0, costUsd: 0, reported: false };
+  return { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0, costUsd: 0, reported: false, perCall: [] };
 }
 
 export function makeCliBrain(opts: CliBrainOptions): Brain & {
@@ -142,6 +162,7 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
   };
 
   async function runOnce(prompt: string): Promise<string> {
+    const callStart = Date.now();
     const result = await import("execa").then(({ execa }) =>
       execa(opts.command, opts.args(prompt, { model: self.model, effort: self.effort, allowDir: self.allowDir }), {
         stdin: "ignore",
@@ -172,6 +193,15 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
       usage.cacheReadTokens += reported.cacheReadTokens ?? 0;
       usage.cacheCreateTokens += reported.cacheCreateTokens ?? 0;
       usage.costUsd += reported.costUsd ?? 0;
+      usage.perCall.push({
+        n: usage.calls,
+        inputTokens: reported.inputTokens ?? 0,
+        outputTokens: reported.outputTokens ?? 0,
+        cacheReadTokens: reported.cacheReadTokens ?? 0,
+        cacheCreateTokens: reported.cacheCreateTokens ?? 0,
+        costUsd: reported.costUsd ?? 0,
+        ms: Date.now() - callStart,
+      });
     }
 
     return opts.extractText(result.stdout);
