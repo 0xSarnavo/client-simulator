@@ -62,6 +62,17 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
   let exit: ExitReason | null = null;
   let consecutiveFailures = 0;
   let failedHint: string | undefined;
+  /**
+   * Stuck-loop nudges. The detector used to terminate on first detection; the
+   * sweep showed most of those sessions (haiku 4, sonnet 2) would have become
+   * real in-character abandons if told to stop repeating. Now the persona is
+   * nudged up to MAX_NUDGES times; only a loop that survives every nudge is a
+   * guardrail kill. Detection runs on the full trail, so one more repetition
+   * after a nudge re-fires it — an ignored nudge costs one step, not a window.
+   */
+  const MAX_NUDGES = 3;
+  let nudgesUsed = 0;
+  let nudgeHint: string | undefined;
   let verificationsUsed = 0;
   let emailResult: string | undefined;
   /** The last mail that actually landed — it stays in the inbox after later checks */
@@ -99,7 +110,7 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
     if (elapsedMs > budgetMs) {
       exit = {
         kind: "guardrail",
-        detail: `Time budget exhausted at step ${step}: ${Math.round(elapsedMs / 60_000)}m active (budget ${budgetMs / 60_000}m, ${Math.round(waivedMs / 1000)}s of waiting excluded)`,
+        detail: `Time budget exhausted at step ${step}: ${Math.round(elapsedMs / 60_000)}m active (budget ${budgetMs / 60_000}m, ${Math.round(waivedMs / 1000)}s of waiting/thinking excluded)`,
       };
       break;
     }
@@ -123,7 +134,7 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
       url: snap.url,
       stepNumber: step,
       history: events,
-      failedHint,
+      failedHint: nudgeHint ?? failedHint,
       emailAddress: opts.mail?.box.address,
       emailResult,
       readsFiles: opts.brain.readsFiles ?? false,
@@ -136,8 +147,13 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
     // past the budget and printing it read as "[9/8]"
     if (!opts.tag) process.stdout.write(`  [${spent + 1}/${persona.patience_steps}] thinking...`);
     let decision: Decision;
+    const thinkStart = Date.now();
     try {
       decision = await brain.decide(ctx);
+      // Brain latency is the CLI's speed, not the site's friction — waive it
+      // from the wall clock the same way mail polling is waived. A slow model
+      // now buys fewer steps only through its own patience, not the timer.
+      waivedMs += Date.now() - thinkStart;
     } catch (e) {
       console.log(`${tag ? `  ${tag}brain` : ""} failed`);
       exit = {
@@ -204,17 +220,29 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
       break;
     }
 
-    // GUARDRAIL: repeating action pattern
+    // GUARDRAIL: repeating action pattern — nudge before killing
     const loop = stuckPattern([...events, event]);
     if (loop) {
+      if (nudgesUsed < MAX_NUDGES) {
+        nudgesUsed++;
+        nudgeHint = `You have repeated yourself (${loop}) and it is not working. Do something DIFFERENT — another element, scroll somewhere new, go back — or leave in character with \`abandon\` and say why.`;
+        event.note = [event.note, `stuck loop (${loop}) — nudged ${nudgesUsed}/${MAX_NUDGES}, action not executed`]
+          .filter(Boolean)
+          .join(" | ");
+        events.push(event);
+        appendFileSync(jsonlPath, JSON.stringify(event) + "\n");
+        console.log(`  ${tag}⚠ stuck loop (${loop}) — nudge ${nudgesUsed}/${MAX_NUDGES}`);
+        continue; // the action is another lap of the loop; don't execute it
+      }
       events.push(event);
       appendFileSync(jsonlPath, JSON.stringify(event) + "\n");
       exit = {
         kind: "guardrail",
-        detail: `Stuck loop detected at step ${step}: ${loop} on ${snap.url}`,
+        detail: `Stuck loop detected at step ${step}: ${loop} on ${snap.url} — persisted through ${MAX_NUDGES} nudges`,
       };
       break;
     }
+    nudgeHint = undefined; // a non-looping decision means the nudge landed
 
     // Fix 3: the JSONL line is written at the END of the step, so overrides and
     // action failures recorded below actually reach the file the experts read.

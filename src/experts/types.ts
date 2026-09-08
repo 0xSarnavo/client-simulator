@@ -40,13 +40,16 @@ export function trailSummary(events: StepEvent[]): string {
       events
         .map(
           (e) =>
-            `step ${e.n} [${e.url}] confusion ${e.decision.confusion}/10 (${e.decision.emotion}): "${e.decision.thought}" -> ${e.decision.action.type}${e.note ? ` [note: ${e.note}]` : ""}`,
+            `step ${e.n} [${e.url}]${e.screenshot ? ` [shot: ${e.screenshot.split("/").pop()}]` : ""} confusion ${e.decision.confusion}/10 (${e.decision.emotion}): "${e.decision.thought}" -> ${e.decision.action.type}${e.note ? ` [note: ${e.note}]` : ""}`,
         )
         .join("\n"),
     ) +
     // one simulated prospect is a signal, not a measurement — findings must not
     // read as "users dropped here" when no user has been near the site
-    `\n\nThis was ONE simulated prospect, not measured traffic. Phrase every finding as a risk a real visitor could hit ("people may stall here", "a visitor might not find X") — never as observed user behaviour.`
+    `\n\nThis was ONE simulated prospect, not measured traffic. Phrase every finding as a risk a real visitor could hit ("people may stall here", "a visitor might not find X") — never as observed user behaviour.` +
+    // fabricated findings are single-source and uncited; real ones can point at
+    // the trail. Requiring the pointer is what makes the difference checkable.
+    `\n\nEVERY finding must cite its evidence: the step number and a VERBATIM quote from the trail above (and the shot filename when you describe something visual). A claim you cannot back with a quoted trail line does not go in the report — leave it out rather than approximate. Never invent statistics, percentages, certifications, or user counts: if a number is not in the trail or on the page, it does not exist.`
   );
 }
 

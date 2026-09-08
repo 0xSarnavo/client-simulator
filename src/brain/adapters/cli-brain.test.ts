@@ -68,3 +68,12 @@ describe("parseVerdict", () => {
     assert.equal(parseVerdict("I think it worked?"), null);
   });
 });
+
+describe("emptyUsage", () => {
+  it("starts with an empty per-call ledger", async () => {
+    const { emptyUsage } = await import("./cli-brain.js");
+    const u = emptyUsage();
+    assert.deepEqual(u.perCall, []);
+    assert.equal(u.reported, false);
+  });
+});

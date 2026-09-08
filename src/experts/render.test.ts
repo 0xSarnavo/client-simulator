@@ -83,3 +83,26 @@ describe("parseJsonObject", () => {
     });
   });
 });
+
+describe("trailSummary citations", () => {
+  it("demands verbatim citations and carries shot filenames", async () => {
+    const { trailSummary } = await import("./types.js");
+    const out = trailSummary([
+      {
+        n: 3,
+        url: "https://example.com/signup",
+        timestamp: "2026-09-08T00:00:00Z",
+        screenshot: "/tmp/session/shots/step-3.png",
+        decision: {
+          thought: "where is the price",
+          emotion: "confused",
+          confusion: 6,
+          action: { type: "scroll", direction: "down" },
+        },
+      } as never,
+    ]);
+    assert.match(out, /\[shot: step-3\.png\]/);
+    assert.match(out, /VERBATIM quote/);
+    assert.match(out, /Never invent statistics/);
+  });
+});
