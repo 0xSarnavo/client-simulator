@@ -23,6 +23,46 @@ mechanical work. If you cannot fill in **Why**, there is no entry to write.
 
 ---
 
+## 2026-09-08 — `--goal`: pass/fail instead of "how did it feel"
+
+**Decided:** `--goal "<text>"` runs the queue as a goal test: every queued
+persona gets the asserted goal in place of its own, `--steps <n>` caps the
+session, and the process exits 0 only when every session ends `completed` —
+which already requires `verifyGoal` to agree, so the pass condition costs no
+new machinery. Output stays a persona session (thoughts, video, report); only
+the goal and the exit code change.
+
+**Why:** a persona run ends in "confusion 6/10, felt lost" — not falsifiable,
+no reason to re-run. "Log in and get an API key: FAIL at step 9" is, and an
+exit code is what CI consumes. Personas already carried a `goal` field the
+verifier judged; the flag was the missing 30 lines, not a new subsystem.
+
+**Rejected:** a separate goal-test mode with its own loop. The session loop
+already terminates on complete/abandon/guardrail; a second loop would drift.
+
+**Files:** `src/cli.ts`
+
+**Ref:** uncommitted
+
+## 2026-09-08 — mailtest sends itself the test email
+
+**Decided:** `--mailtest` now SMTP-sends one message (via `curl`, same
+credentials, `smtp.` swapped for `imap.`) to the mailbox it just created,
+instead of only waiting for the operator to send one. Manual send remains the
+fallback when SMTP fails.
+
+**Why:** the 2026-09-08 preflight "passed" by creating and destroying a box —
+while proving nothing about inbound delivery, which is the exact thing seven
+"the magic link never arrived" findings depend on. A health check that skips
+the failure mode it exists for is decoration.
+
+**Rejected:** an SMTP library. curl does SMTP, execa is already a dependency,
+and this is a health check, not a mail stack.
+
+**Files:** `src/cli.ts`
+
+**Ref:** uncommitted
+
 ## 2026-09-04 — Shareable PDFs, per-model funnels, live progress
 
 **Decided:** three operator-facing additions from a real batch session.

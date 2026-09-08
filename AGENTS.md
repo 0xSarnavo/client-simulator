@@ -120,6 +120,18 @@ was reorganised — see [DECISIONS.md](DECISIONS.md), 2026-08-31.
 screen, plus a headings outline of what lies below. On a 21-screen page that is
 40 elements instead of 776. Scrolling is free — it does not spend patience.
 
+### Goal tests
+
+```bash
+client-simulator <url> --goal "log in and get an API key" --steps 15 --yes --headless
+```
+
+`--goal` swaps every queued persona's goal for the asserted one and turns the
+run into a pass/fail test: exit code 0 only when every session ends
+`completed` (verification included), 1 otherwise — so it slots into CI.
+`--steps` (1-50) caps each session's patience for the test. Everything else is
+unchanged: same personas, same reports, same artifacts.
+
 ### On its own
 
 ```bash

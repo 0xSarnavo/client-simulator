@@ -25,6 +25,7 @@ import type { MailProvider, Mailbox, MailMessage } from "./mail/types.js";
 import { ImapProvider, type ImapConfig } from "./mail/imap.js";
 import { extractCodes, extractLinks } from "./mail/types.js";
 import { runDoctor, doctorStateExists } from "./doctor.js";
+import { execa } from "execa";
 import { createInterface } from "node:readline/promises";
 import { resolveBrainChoice } from "./brain/picker.js";
 import {
@@ -194,6 +195,11 @@ WHO GOES IN:
   --persona <list>            explicit queue, e.g. cold,warm,hot (max 10)
   --runs <n>                  n prospects, chosen at random (max 10)
                               omit both and it offers the personas built for this site
+  --goal "<text>"             goal test: every queued persona gets this goal, and the
+                              process exits 0 only if every session completes it —
+                              fits CI ("log in and get an API key")
+  --steps <n>                 step cap per session, 1-50 (with --goal; default is
+                              each persona's own patience)
 
 HOW IT RUNS:
   --brain <claude|opencode|codex>   which AI CLI plays the client
@@ -252,6 +258,10 @@ interface CommonArgs {
   parallel?: boolean;
   /** personas to generate for the site (2-10); undefined asks, default 10 */
   count?: number;
+  /** goal test: overrides every queued persona's goal; exit code 1 unless all complete */
+  goal?: string;
+  /** step cap per session (overrides patience_steps) */
+  steps?: number;
   /** never prompt — take the default for every question */
   yes?: boolean;
   /** last stage to run; undefined means all three */
@@ -283,6 +293,22 @@ function parseCommon(argv: string[]): CommonArgs {
       args.time = t;
     }
     else if (a === "--flow") args.flow = value(++i, a);
+    else if (a === "--goal") {
+      const g = value(++i, a).trim();
+      if (!g || g.length > 300) {
+        console.error(`--goal takes 1 to 300 characters — a paragraph is not a goal.`);
+        process.exit(1);
+      }
+      args.goal = g;
+    }
+    else if (a === "--steps") {
+      const n = parseInt(value(++i, a), 10);
+      if (!Number.isFinite(n) || n < 1 || n > 50) {
+        console.error(`--steps takes 1 to 50. Got "${argv[i]}".`);
+        process.exit(1);
+      }
+      args.steps = n;
+    }
     else if (a === "--count") {
       const c = parseInt(value(++i, a), 10);
       if (!Number.isFinite(c) || c < 2 || c > 10) {
@@ -662,8 +688,15 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
   });
 
   let done = 0;
+  let goalPasses = 0;
   const runOne = async ({ pid, sessionDir, n }: (typeof runs)[number]) => {
-    const persona: Persona = registry.personas[pid];
+    const base: Persona = registry.personas[pid];
+    // A goal test asks "did it work", not "how did it feel" — same persona,
+    // its goal swapped for the asserted one. verifyGoal already judges
+    // persona.goal, so completion IS the pass condition.
+    const persona: Persona = common.goal
+      ? { ...base, goal: common.goal, patience_steps: common.steps ?? base.patience_steps }
+      : base;
     const tag = tagged ? pid : undefined;
 
     // one provider per agent — an IMAP connection is stateful, and concurrent
@@ -746,6 +779,7 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
       );
       dirs.push(sessionDir);
 
+      if (exit.kind === "completed") goalPasses++;
       printPerCallUsage((brain as { usage?: unknown }).usage);
       printSessionSummary(exit, events, sessionDir, ++done, personaIds.length);
     } catch (e) {
@@ -769,6 +803,13 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
 
   if (parallel) await Promise.all(runs.map(runOne));
   else for (const r of runs) await runOne(r);
+  if (common.goal) {
+    const pass = goalPasses === personaIds.length;
+    console.log(
+      `\n  goal ${pass ? "PASS" : "FAIL"}: ${goalPasses}/${personaIds.length} session(s) completed "${common.goal}"`,
+    );
+    if (!pass) process.exitCode = 1;
+  }
   return dirs;
 }
 
@@ -1154,6 +1195,38 @@ async function all(url: string, common: CommonArgs) {
 }
 
 /** Mailbox lifecycle test: create -> wait for real mail -> extract -> destroy */
+/**
+ * Send one email to the test mailbox through the same account's SMTP, via
+ * curl — no new dependency for a 20-line health check. Gmail app passwords
+ * work for both protocols, and smtp.<host> pairs with imap.<host> everywhere
+ * we have seen; anywhere it doesn't, the manual-send fallback still stands.
+ */
+async function smtpSelfSend(to: string): Promise<boolean> {
+  const cfg = mailConfig();
+  if (!cfg) return false;
+  const smtpHost = cfg.host.replace(/^imap\./, "smtp.");
+  const msg = [
+    `From: ${cfg.user}`,
+    `To: ${to}`,
+    `Subject: client-simulator mailtest`,
+    ``,
+    `Your verification code is 424242.`,
+    ``,
+  ].join("\r\n");
+  try {
+    await execa(
+      "curl",
+      ["-sS", "--ssl-reqd", `smtps://${smtpHost}:465`,
+       "--mail-from", cfg.user, "--mail-rcpt", to,
+       "--user", `${cfg.user}:${cfg.pass}`, "-T", "-"],
+      { input: msg, timeout: 30_000 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function mailtest() {
   const mail = setupMail();
   if (!mail) {
@@ -1165,7 +1238,15 @@ async function mailtest() {
 
   const box = await mail.provider.create("mailtest");
   console.log(`\n  ✅ mailbox created: ${box.address}`);
-  console.log(`\n  → Send any email to that address now (from another account).\n`);
+
+  // Box lifecycle alone proves nothing about delivery — a run once blamed a
+  // site for "the magic link never arrived" when the inbox was ours to fix.
+  // Send ourselves one through SMTP so the test covers the inbound path too.
+  if (await smtpSelfSend(box.address)) {
+    console.log(`  ✉ test email sent to it via SMTP — waiting for it to land.\n`);
+  } else {
+    console.log(`\n  → SMTP self-send failed; send any email to that address now (from another account).\n`);
+  }
 
   const deadline = Date.now() + 120_000;
   let msgs: MailMessage[] = [];
@@ -1545,6 +1626,8 @@ const VALUE_FLAGS = new Set([
   "--from",
   "--site",
   "--count",
+  "--goal",
+  "--steps",
 ]);
 
 /** Everything that is not a flag or a flag's value. */
