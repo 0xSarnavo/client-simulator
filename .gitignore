@@ -2,20 +2,18 @@ node_modules/
 dist/
 runs/
 personas/
-LOCAL-SETUP.md
-PIVOT.md
-EVAL-PROMPT.md
-scripts/site-c-upload.mjs
-scripts/sweep.sh
 package-lock.json
 .DS_Store
 .env
 .clientsimulator-state.json
 
+# everything machine-local lives in local/ — see local/README.md
+local/
+
 # local only — the marketing site deploys straight to Railway
 website/
 runs-backup-*/
 
-# local state — kept here rather than .git/info/exclude so a fresh clone is clean
-.site-c-upload-state.json
+# tool-written local state
+.*-upload-state.json
 .claude/settings.local.json

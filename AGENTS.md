@@ -103,7 +103,7 @@ Point it at a site and five stages run in order:
 |---|---|---|
 | `site` | Scrapes the landing page: what it sells, to whom, its CTA, signup path, visible pricing, walls, what a first-timer trips on | `runs/<site>/SITE.md` |
 | `personas` | Builds a prospect set fitted to that product, spread across core / adjacent / edge | `runs/<site>/personas/` |
-| `visit` | One session per persona, all at once when several are queued — live thought stream (lines prefixed by persona id), ending COMPLETED / ABANDONED / GUARDRAIL | `session.jsonl`, `report.md`, `video.webm` |
+| `visit` | One session per persona — one at a time by default (`--parallel` runs a multi-persona queue all at once; omit both flags and it asks) — live thought stream (lines prefixed by persona id), ending COMPLETED / ABANDONED / GUARDRAIL | `session.jsonl`, `report.md`, `video.webm` |
 | `report` | Aggregates the funnel across the site's sessions | `runs/<site>/AGGREGATE.md` |
 | `fix` | Expert panel over each session | `FIXES.md` per session |
 
@@ -520,7 +520,7 @@ Seventeen things that will bite you. Most were paid for once already — see
 15. **Always resolve a persona with its site: `getPersonaRegistry(url)`.** Without
     it, personas generated into `runs/<site>/personas/` are missing and the
     `?? PERSONAS.cold` fallback silently reviews the run as somebody else.
-16. **Queued personas run concurrently, so nothing may be shared across them.**
+16. **Queued personas may run concurrently (`--parallel`), so nothing may be shared across them.**
     Each gets its own brain, browser, `ImapProvider` and directory — an IMAP
     connection is stateful, and concurrent polls through a shared one interleave
     on a single socket. Session dirs are minted serially before launch because

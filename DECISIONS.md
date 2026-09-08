@@ -43,7 +43,7 @@ something you hand a client; a single combined funnel hides which model to
 trust; and a headless run of 6 concurrent agents was an unreadable wall of
 interleaved thoughts.
 
-**Not built (parked in EVAL-PROMPT.md, untracked):** a fable-judged eval that
+**Not built (parked in local/EVAL-PROMPT.md, untracked):** a fable-judged eval that
 scores each model's completion, finding quality, guardrail behaviour and report
 usefulness. Left as a prompt to run later, deliberately — the judge model is
 kept out of the swept set so it scores neutrally.
