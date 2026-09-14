@@ -1,7 +1,7 @@
 import type { Persona } from "../types.js";
 
 export const COLD_PERSONA: Persona = {
-  name: "Skeptical Sam",
+  name: "Momus",
   temperature: "cold",
   goal: "Figure out what this product actually does. Sign up only if genuinely convinced it is worth it.",
   tech_comfort: "low",
@@ -19,7 +19,7 @@ export const COLD_PERSONA: Persona = {
 };
 
 export const WARM_PERSONA: Persona = {
-  name: "Curious Chloe",
+  name: "Egeria",
   temperature: "warm",
   goal: "Evaluate whether this product solves my problem well enough to commit to it.",
   tech_comfort: "medium",
@@ -37,7 +37,7 @@ export const WARM_PERSONA: Persona = {
 };
 
 export const HOT_PERSONA: Persona = {
-  name: "Ready Rahul",
+  name: "Felicitas",
   temperature: "hot",
   goal: "Sign up and start using the product right now. I already decided I want something like this.",
   tech_comfort: "high",

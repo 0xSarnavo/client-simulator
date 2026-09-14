@@ -452,10 +452,10 @@ function hostPath(url: string): string {
   }
 }
 
-/** Within a per-site report the site is implicit, so show <date>/<run>. */
+/** Within a per-site report the site is implicit, so show <seat>/<model>/<run>. */
 function dirName(dir: string): string {
   const parts = dir.split("/").filter(Boolean);
-  return parts.slice(-2).join("/") || dir;
+  return parts.slice(-3).join("/") || dir;
 }
 
 function cell(s: string, max = 120): string {

@@ -29,7 +29,7 @@ describe("buildSystemPrompt / buildUserPrompt", () => {
     const user = buildUserPrompt(c);
     for (const perStep of [/https:\/\/site\.com/, /Step number/, /ref=e1\]/, /LAST ACTION FAILED/, /thought 8/])
       assert.ok(!perStep.test(sys), `system half changes per step: ${perStep}`);
-    for (const fixed of [/Skeptical Sam/, /HARD SAFETY RULES/, /cold\.a1@x\.com/, /"abandon"/])
+    for (const fixed of [/Momus/, /HARD SAFETY RULES/, /cold\.a1@x\.com/, /"abandon"/])
       assert.ok(!fixed.test(user), `user half repeats the static block: ${fixed}`);
     const joined = buildPrompt(c);
     assert.ok(joined.startsWith(buildSystemPrompt(c, false)) && joined.includes(user), "joined prompt is not the two halves");
@@ -43,7 +43,7 @@ describe("buildSystemPrompt / buildUserPrompt", () => {
 describe("buildPrompt", () => {
   it("carries the things the persona decides from", () => {
     const p = buildPrompt(ctx());
-    assert.match(p, /Skeptical Sam/);
+    assert.match(p, /Momus/);
     assert.match(p, /ref=e1/, "the page snapshot must reach the model verbatim");
     assert.match(p, /https:\/\/site\.com/);
     assert.ok(p.includes(PERSONAS.cold.goal), "the goal was dropped");

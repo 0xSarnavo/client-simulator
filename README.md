@@ -63,7 +63,8 @@ client-simulator <url>                                   # plain pipeline, menus
 client-simulator <url> --goal "sign up and get an API key" --steps 15 --yes   # pass/fail, exit 0/1, for CI
 client-simulator <url> --flow "signup through to the dashboard"               # checkpoints, scored per session
 client-simulator <url> --persona marcus,marcus,marcus    # same persona three times
-client-simulator --report | --fix <dirs> | --pdf | --replication              # rerun a stage on past sessions
+client-simulator --history                               # every run, one line each, with its one number
+client-simulator --report | --fix | --replication <site>  # a site name means its newest run; site/date/time names one
 ```
 
 Drop `runs/<site>/analytics.json` (top exit pages, device mix, entry sources) and the personas are weighted toward your real visitors.

@@ -139,7 +139,8 @@ function preferredModel(dirs: string[]): string | null {
 
 /**
  * Which markdown files make up a site's shareable packet, in reading order:
- * the funnel, then one model's expert reports (not all six — a sweep bundles
+ * the short report, then what the ladder wrote (REPORT.md, VERIFIED.md) when
+ * it ran, else one model's expert reports (not all six — a sweep bundles
  * dozens of sessions and the packet is for a person to read).
  */
 export function packetFor(url: string, model?: string): { files: string[]; model: string | null } {
@@ -147,6 +148,8 @@ export function packetFor(url: string, model?: string): { files: string[]; model
   const files: string[] = [];
   const aggregate = `${RUNS_ROOT}/${site}/AGGREGATE.md`;
   if (existsSync(aggregate)) files.push(aggregate);
+  const ladder = ["REPORT.md", "VERIFIED.md"].map((f) => `${RUNS_ROOT}/${site}/${f}`).filter(existsSync);
+  if (ladder.length && !model) return { files: [...files, ...ladder], model: null };
 
   const sessionDirs = findSessionDirs(`${RUNS_ROOT}/${site}`);
   const chosen = model ?? preferredModel(sessionDirs);
