@@ -699,6 +699,23 @@ numbered structure. Resolve in this order:
 4. **`ponytail` governs the code; `no-ai-slop` governs the writing about it.** Neither
    one gets a say in the other's territory.
 
+## Releases
+
+`CHANGELOG.md` is the release notes and it is written as you go: every commit
+with a user-visible change adds a line under **Unreleased**, in plain words a
+person running the tool would recognise. Cutting a release:
+
+```bash
+# move the Unreleased block under "## <version> — <date>" in CHANGELOG.md, bump package.json, then
+git add CHANGELOG.md package.json && git commit -m "<version>: <one line>"
+git tag -a v<version> -m "<version>"
+git push && git push --tags
+gh release create v<version> --title "<version>" --notes-file <(awk '/^## <version>/{f=1;next} /^## /{f=0} f' CHANGELOG.md)
+```
+
+The GitHub Release carries the same text as the file; nothing is written twice
+by hand. Layout changes under `runs/` and renamed flags are always a minor bump.
+
 ## The decisions log
 
 [DECISIONS.md](DECISIONS.md) is where the *why* lives. Read it before proposing;
