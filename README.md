@@ -1,18 +1,20 @@
-# client-simulator
+# Leakdown
 
 Simulated prospects walk through your website's signup in a real browser, think out loud, and quit the way people do. You get one page: where they stalled, in their words, with the element and a "check it yourself" line — and an expert layer that proposes the fix.
 
 Alpha. Runs on the AI CLI subscription you already have (Claude Code, opencode, Codex). No API keys.
 
 ```bash
-git clone https://github.com/0xSarnavo/client-simulator
-cd client-simulator && npm install && npm run build
+git clone https://github.com/0xSarnavo/leakdown-cli
+cd leakdown-cli && npm ci && npm run build
 npx playwright install chromium
 node dist/cli.js --doctor                                  # checks Node, Chromium, your AI CLI, mail
 node dist/cli.js your-site.com --ladder --yes --headless   # the whole thing, ~1 hour
 ```
 
 Then read `runs/your-site.com/AGGREGATE.md`.
+
+(Installed globally? The same commands work as `leakdown --doctor` and `leakdown your-site.com --ladder --yes --headless`.)
 
 ## What one run does
 
@@ -45,26 +47,28 @@ Read it as risk, not traffic: a simulated prospect stalling is a signal that rea
 
 ## Email walls
 
-Signup flows send codes and magic links. With a catch-all domain forwarded to an IMAP inbox, every persona gets its own address and reads its own mail:
+Signup flows send codes and magic links. With a catch-all domain forwarded to an IMAP inbox, every persona gets its own address and reads its own mail. Copy `.env.example` to `.env` and fill it in (never commit `.env`):
 
 ```
-CLIENTSIM_IMAP_HOST="imap.gmail.com"
-CLIENTSIM_IMAP_USER="you@gmail.com"
-CLIENTSIM_IMAP_PASS="xxxx xxxx xxxx xxxx"   # app password
-CLIENTSIM_MAIL_DOMAIN="yourdomain.com"      # catch-all → that inbox
+LEAKDOWN_IMAP_HOST="imap.gmail.com"
+LEAKDOWN_IMAP_USER="you@gmail.com"
+LEAKDOWN_IMAP_PASS="xxxx xxxx xxxx xxxx"   # app password
+LEAKDOWN_MAIL_DOMAIN="yourdomain.com"      # catch-all → that inbox
 ```
+
+> The old `CLIENTSIM_*` names still work but are deprecated — use `LEAKDOWN_*`.
 
 `--mailtest` proves the SMTP and IMAP side. Every run checks the mailbox once a day and marks its sessions; if two prospects blame email and nothing inbound arrived, the report says the verdicts are unverified rather than blaming your site.
 
 ## Other ways to run it
 
 ```bash
-client-simulator <url>                                   # plain pipeline, menus for brain, model, who visits
-client-simulator <url> --goal "sign up and get an API key" --steps 15 --yes   # pass/fail, exit 0/1, for CI
-client-simulator <url> --flow "signup through to the dashboard"               # checkpoints, scored per session
-client-simulator <url> --persona marcus,marcus,marcus    # same persona three times
-client-simulator --history                               # every run, one line each, with its one number
-client-simulator --report | --fix | --replication <site>  # a site name means its newest run; site/date/time names one
+leakdown <url>                                   # plain pipeline, menus for brain, model, who visits
+leakdown <url> --goal "sign up and get an API key" --steps 15 --yes   # pass/fail, exit 0/1, for CI
+leakdown <url> --flow "signup through to the dashboard"               # checkpoints, scored per session
+leakdown <url> --persona marcus,marcus,marcus    # same persona three times
+leakdown --history                               # every run, one line each, with its one number
+leakdown --report | --fix | --replication <site>  # a site name means its newest run; site/date/time names one
 ```
 
 Drop `runs/<site>/analytics.json` (top exit pages, device mix, entry sources) and the personas are weighted toward your real visitors.
@@ -75,6 +79,6 @@ Node 20+, Chromium via Playwright, one AI CLI logged in: `claude` (Claude Code),
 
 ## Docs
 
-`AGENTS.md` is the full operating and code guide. `DECISIONS.md` is why the code looks the way it does, including the ideas that were built, measured and thrown away.
+`AGENTS.md` is the full operating and code guide. `DECISIONS.md` is why the code looks the way it does, including the ideas that were built, measured and thrown away. `CONTRIBUTING.md` is how to contribute. `CHANGELOG.md` is the release notes.
 
-MIT.
+[MIT](LICENSE) — Sarnavo Saha Sardar.

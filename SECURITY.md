@@ -2,17 +2,21 @@
 
 ## Reporting
 
-Email contact via a private GitHub security advisory with "security" in the subject. You will get a reply
-within 72 hours and a fix or a plan within 14 days for anything confirmed. Please
-do not open a public issue for a vulnerability until it is fixed.
+Report via GitHub Security Advisories (https://github.com/0xSarnavo/leakdown-cli/security/advisories).
+
+You will get a reply within 72 hours and a fix or a plan within 14 days for
+anything confirmed. Please do not open a public issue for a vulnerability
+until it is fixed.
 
 ## What is in scope
 
 - The CLI in this repository: the browser driver, the action guard
   (`src/safety.ts`), the mail reader, the orders client, anything that touches
   a target site or a mailbox.
-- The website and its request API (`website/`): the static server, the
-  `/request` endpoint, the token-protected `/orders` routes.
+- The website and its request API (the
+  [leakdown-website](https://github.com/0xSarnavo/leakdown-website) repo,
+  deployed separately): the static server, the `/request` endpoint, the
+  token-protected `/orders` routes.
 
 ## What the tool does on your behalf, and its limits
 
