@@ -2,10 +2,13 @@ node_modules/
 dist/
 runs/
 personas/
-package-lock.json
 .DS_Store
 .env
-.clientsimulator-state.json
+.leakdown-state.json
+# compat: old state file from client-simulator era (remove after next minor)
+# .clientsimulator-state.json
+.env.*
+coverage/
 
 # everything machine-local lives in local/ — see local/README.md
 local/

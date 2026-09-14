@@ -1,8 +1,28 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { detectBrains } from "./brain/catalog.js";
 
-const STATE_FILE = ".clientsimulator-state.json";
+const STATE_FILE = ".leakdown-state.json";
 const STATE_MAX_AGE_MS = 7 * 24 * 3600_000; // re-verify weekly
+
+/**
+ * Resolve LEAKDOWN_* with CLIENTSIM_* fallback.
+ * Old alpha .env files use the CLIENTSIM_ prefix; they keep working for one
+ * minor with a single deprecation warning.
+ */
+let warnedCompat = false;
+function envWithFallback(fresh: string, legacy: string): string | undefined {
+  const v = process.env[fresh];
+  if (v !== undefined) return v;
+  const old = process.env[legacy];
+  if (old !== undefined) {
+    if (!warnedCompat) {
+      console.warn("CLIENTSIM_* deprecated, use LEAKDOWN_*");
+      warnedCompat = true;
+    }
+    return old;
+  }
+  return undefined;
+}
 
 interface DoctorResult {
   name: string;
@@ -144,8 +164,11 @@ async function checkBrainLive(brainName: string): Promise<DoctorResult> {
 
 /** Live mail test: create + destroy an ephemeral mailbox */
 async function checkMailLive(): Promise<DoctorResult> {
-  const env = process.env;
-  if (!env.CLIENTSIM_IMAP_HOST || !env.CLIENTSIM_IMAP_USER || !env.CLIENTSIM_IMAP_PASS || !env.CLIENTSIM_MAIL_DOMAIN) {
+  const host = envWithFallback("LEAKDOWN_IMAP_HOST", "CLIENTSIM_IMAP_HOST");
+  const user = envWithFallback("LEAKDOWN_IMAP_USER", "CLIENTSIM_IMAP_USER");
+  const pass = envWithFallback("LEAKDOWN_IMAP_PASS", "CLIENTSIM_IMAP_PASS");
+  const domain = envWithFallback("LEAKDOWN_MAIL_DOMAIN", "CLIENTSIM_MAIL_DOMAIN");
+  if (!host || !user || !pass || !domain) {
     return {
       name: "mailbox (live)",
       ok: true, // optional feature — absence is fine
@@ -155,13 +178,15 @@ async function checkMailLive(): Promise<DoctorResult> {
   }
   try {
     const { ImapProvider } = await import("./mail/imap.js");
+    const tls = envWithFallback("LEAKDOWN_IMAP_TLS", "CLIENTSIM_IMAP_TLS");
+    const portRaw = envWithFallback("LEAKDOWN_IMAP_PORT", "CLIENTSIM_IMAP_PORT");
     const p = new ImapProvider({
-      host: env.CLIENTSIM_IMAP_HOST,
-      user: env.CLIENTSIM_IMAP_USER,
-      pass: env.CLIENTSIM_IMAP_PASS,
-      domain: env.CLIENTSIM_MAIL_DOMAIN,
-      tls: env.CLIENTSIM_IMAP_TLS !== "false",
-      port: env.CLIENTSIM_IMAP_PORT ? Number(env.CLIENTSIM_IMAP_PORT) : undefined,
+      host,
+      user,
+      pass,
+      domain,
+      tls: tls !== "false",
+      port: portRaw ? Number(portRaw) : undefined,
     });
     const box = await p.create("doctortest");
     await p.destroy(box);
@@ -182,11 +207,11 @@ function printQuickStart() {
   ${"─".repeat(58)}
   Ready. Common commands:
 
-  client-simulator <url> --ladder --yes --headless   the measured fleet: wide, verify, dig, report
-  client-simulator <url>                              the plain pipeline, menus for every choice
-  client-simulator <url> --goal "sign up and get an API key" --steps 15   pass/fail, exit 0/1
-  client-simulator --report | --fix <dirs> | --pdf    rerun a stage on past sessions
-  client-simulator --orders / --order <id>            requests left on the website
+  leakdown <url> --ladder --yes --headless   the measured fleet: wide, verify, dig, report
+  leakdown <url>                              the plain pipeline, menus for every choice
+  leakdown <url> --goal "sign up and get an API key" --steps 15   pass/fail, exit 0/1
+  leakdown --report | --fix <dirs> | --pdf    rerun a stage on past sessions
+  leakdown --orders / --order <id>            requests left on the website
 
   Sessions land in runs/<site>/<date>/<time>-<persona>/
   Brains: --brain claude (default) | --brain opencode | --brain codex
@@ -240,7 +265,7 @@ export async function runDoctor(brainName = "claude", force = false): Promise<bo
     saveState(results);
     printQuickStart();
   } else {
-    console.error(`\n  ✗ Fix the ✗ items above, then run: client-simulator doctor --force\n`);
+    console.error(`\n  ✗ Fix the ✗ items above, then run: leakdown doctor --force\n`);
   }
   return allOk;
 }

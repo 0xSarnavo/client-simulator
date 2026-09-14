@@ -10,7 +10,7 @@ const CALL_RETRY_BACKOFF_MS = 20_000;
 
 /**
  * Allowlisted environment for spawned brain CLIs. Everything else — including
- * CLIENTSIM_* secrets like the IMAP password — stays in this process and out
+ * LEAKDOWN_* secrets like the IMAP password — stays in this process and out
  * of every subprocess. Proxy/TLS vars are kept so corporate networks work.
  */
 const SPAWN_ENV_ALLOWLIST = [
@@ -21,7 +21,7 @@ const SPAWN_ENV_ALLOWLIST = [
   "SSL_CERT_FILE", "SSL_CERT_DIR",
   "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
   // brain CLI auth/config/endpoints — named here so they stay opt-in while
-  // unknown vars (incl. CLIENTSIM_* secrets) never blanket-inherit
+  // unknown vars (incl. LEAKDOWN_* secrets) never blanket-inherit
   "CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL",
   "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_HOME",
 ];
@@ -58,7 +58,7 @@ export interface CliBrainOptions {
   /**
    * Extra environment for this brain (e.g. opencode's OPENCODE_CONFIG).
    * Merged over a sanitized allowlist — children never inherit the full
-   * parent env, so secrets like CLIENTSIM_IMAP_PASS stay in this process.
+   * parent env, so secrets like LEAKDOWN_IMAP_PASS stay in this process.
    */
   env?: Record<string, string>;
 }

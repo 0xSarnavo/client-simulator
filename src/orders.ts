@@ -17,9 +17,13 @@ export interface Order {
 }
 
 function endpoint(): { base: string; token: string } {
-  const base = process.env.CLIENTSIM_ORDERS_URL?.replace(/\/$/, "");
-  const token = process.env.CLIENTSIM_ORDERS_TOKEN;
-  if (!base || !token) throw new Error("set CLIENTSIM_ORDERS_URL and CLIENTSIM_ORDERS_TOKEN in .env (the website's ORDERS_TOKEN)");
+  const base = process.env.LEAKDOWN_ORDERS_URL?.replace(/\/$/, "")
+    ?? process.env.CLIENTSIM_ORDERS_URL?.replace(/\/$/, "");
+  const token = process.env.LEAKDOWN_ORDERS_TOKEN ?? process.env.CLIENTSIM_ORDERS_TOKEN;
+  if (process.env.CLIENTSIM_ORDERS_URL !== undefined || process.env.CLIENTSIM_ORDERS_TOKEN !== undefined) {
+    console.warn("CLIENTSIM_* deprecated, use LEAKDOWN_*");
+  }
+  if (!base || !token) throw new Error("set LEAKDOWN_ORDERS_URL and LEAKDOWN_ORDERS_TOKEN in .env (the website's ORDERS_TOKEN)");
   return { base, token };
 }
 

@@ -141,20 +141,39 @@ function loadDotEnv() {
   }
 }
 
+let warnedMailCompat = false;
+function mailEnv(fresh: string, legacy: string): string | undefined {
+  const v = process.env[fresh];
+  if (v !== undefined) return v;
+  const old = process.env[legacy];
+  if (old !== undefined) {
+    if (!warnedMailCompat) {
+      console.warn("CLIENTSIM_* deprecated, use LEAKDOWN_*");
+      warnedMailCompat = true;
+    }
+    return old;
+  }
+  return undefined;
+}
+
 function mailConfig(): ImapConfig | null {
   loadDotEnv();
-  const { CLIENTSIM_IMAP_HOST, CLIENTSIM_IMAP_USER, CLIENTSIM_IMAP_PASS, CLIENTSIM_MAIL_DOMAIN } =
-    process.env;
-  if (!CLIENTSIM_IMAP_HOST || !CLIENTSIM_IMAP_USER || !CLIENTSIM_IMAP_PASS || !CLIENTSIM_MAIL_DOMAIN) {
+  const host = mailEnv("LEAKDOWN_IMAP_HOST", "CLIENTSIM_IMAP_HOST");
+  const user = mailEnv("LEAKDOWN_IMAP_USER", "CLIENTSIM_IMAP_USER");
+  const pass = mailEnv("LEAKDOWN_IMAP_PASS", "CLIENTSIM_IMAP_PASS");
+  const domain = mailEnv("LEAKDOWN_MAIL_DOMAIN", "CLIENTSIM_MAIL_DOMAIN");
+  if (!host || !user || !pass || !domain) {
     return null;
   }
+  const tls = mailEnv("LEAKDOWN_IMAP_TLS", "CLIENTSIM_IMAP_TLS");
+  const portRaw = mailEnv("LEAKDOWN_IMAP_PORT", "CLIENTSIM_IMAP_PORT");
   return {
-    host: CLIENTSIM_IMAP_HOST,
-    user: CLIENTSIM_IMAP_USER,
-    pass: CLIENTSIM_IMAP_PASS,
-    domain: CLIENTSIM_MAIL_DOMAIN,
-    tls: process.env.CLIENTSIM_IMAP_TLS !== "false",
-    port: process.env.CLIENTSIM_IMAP_PORT ? Number(process.env.CLIENTSIM_IMAP_PORT) : undefined,
+    host,
+    user,
+    pass,
+    domain,
+    tls: tls !== "false",
+    port: portRaw ? Number(portRaw) : undefined,
   };
 }
 
@@ -754,7 +773,7 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
     // one; without it, whatever the brain invents is what real signup forms get
     console.warn(
       `\n  ⚠ no mailbox configured — personas will invent email addresses and may sign real\n` +
-        `    inboxes up to ${siteSlug(url)}. Set CLIENTSIM_IMAP_* (see README) to give each run a\n` +
+        `    inboxes up to ${siteSlug(url)}. Set LEAKDOWN_IMAP_* (see README) to give each run a\n` +
         `    throwaway address the harness enforces, and to let personas read verification mail.`,
     );
   }
@@ -1680,7 +1699,7 @@ async function mailtest() {
   const mail = setupMail();
   if (!mail) {
     console.error(
-      "Set CLIENTSIM_IMAP_HOST, CLIENTSIM_IMAP_USER, CLIENTSIM_IMAP_PASS, CLIENTSIM_MAIL_DOMAIN first (see README).",
+      "Set LEAKDOWN_IMAP_HOST, LEAKDOWN_IMAP_USER, LEAKDOWN_IMAP_PASS, LEAKDOWN_MAIL_DOMAIN first (see README).",
     );
     process.exit(1);
   }
@@ -1728,7 +1747,7 @@ async function mailtest() {
       console.log(`
   Gmail says the credentials are wrong. Checklist:
     1. IMAP enabled: mail.google.com → gear → See all settings → Forwarding and POP/IMAP → Enable IMAP
-    2. CLIENTSIM_IMAP_PASS must be a 16-char APP PASSWORD (not your login password)
+    2. LEAKDOWN_IMAP_PASS must be a 16-char APP PASSWORD (not your login password)
        → myaccount.google.com/apppasswords (requires 2-Step Verification)
     3. Paste it without extra characters, e.g. "abcd efgh ijkl mnop"`);
     }
