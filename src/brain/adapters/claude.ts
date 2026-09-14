@@ -39,12 +39,18 @@ export function createClaudeBrain(role: BrainRole = "persona") {
     name: "claude",
     // --add-dir opts the session dir in, so Read reaches the screenshots
     readsFiles: true,
+    systemPrompt: true,
     command: "claude",
     // no --resume: each call is self-contained and the prompt carries the
     // journey, so context cannot grow without bound across a run
-    args: (prompt, { model, effort, allowDir }) => [
+    args: (prompt, { model, effort, allowDir, system }) => [
       "-p",
-      prompt,
+      // a prompt starting with "-" is parsed as a flag ("unknown option") and
+      // the whole session dies at step 1 — a leading space keeps it positional
+      prompt.startsWith("-") ? ` ${prompt}` : prompt,
+      // the static persona half rides in the system prompt so the CLI's prompt
+      // cache covers it; the user half is what changes per step
+      ...(system ? ["--append-system-prompt", system] : []),
       ...(model ? ["--model", model] : []),
       ...(effort ? ["--effort", effort] : []),
       // the CLI runs outside the project, so the session dir must be opted in

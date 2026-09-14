@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
-import { generateAggregate, loadSessions } from "./aggregate.js";
+import { generateAggregate, generateDetail, loadSessions } from "./aggregate.js";
 
 const scratch = mkdtempSync(join(tmpdir(), "clientsim-agg-"));
 after(() => rmSync(scratch, { recursive: true, force: true }));
@@ -88,9 +88,33 @@ describe("loadSessions", () => {
   });
 });
 
-describe("generateAggregate", () => {
+describe("generateAggregate (the short report)", () => {
+  it("leads with the one number and the walls, and points at DETAIL.md", () => {
+    const left = (url: string) =>
+      session({
+        personaId: "cold",
+        exit: { kind: "abandoned", reason: "pricing was hidden", question: "how much?" },
+        steps: [{ url: "https://site.com/", confusion: 2, thought: "looking" }, { url, confusion: 7, thought: "no price anywhere" }],
+      });
+    const out = generateAggregate([
+      session({ personaId: "hot", exit: { kind: "completed", summary: "done" } }),
+      left("https://site.com/pricing"),
+      left("https://site.com/pricing"),
+      session({ personaId: "warm", exit: { kind: "guardrail", detail: "stuck" } }),
+    ]);
+    assert.match(out, /\*\*1 of 4 completed their goal\.\*\* 2 walked out with a reason\. 1 were stopped by the harness/);
+    assert.match(out, /### 1\. `site\.com\/pricing` — 2 of 4 walked out here/);
+    assert.match(out, /In their words:\*\* "pricing was hidden"/);
+    assert.match(out, /Check it yourself:\*\* open `site\.com\/pricing`.*"no price anywhere" → clicked e1/);
+    assert.match(out, /DETAIL\.md/);
+    assert.match(out, /risk signals, not measured traffic/);
+    assert.match(out, /Run more than once:\*\* Skeptical Sam 2\/2 abandoned/);
+  });
+});
+
+describe("generateDetail", () => {
   it("says so plainly when there is nothing to report", () => {
-    assert.match(generateAggregate([]), /No valid sessions/);
+    assert.match(generateDetail([]), /No valid sessions/);
   });
 
   it("counts each verdict kind", () => {
@@ -100,15 +124,16 @@ describe("generateAggregate", () => {
       session({ personaId: "hot", exit: { kind: "abandoned", reason: "no pricing", question: "cost?" } }),
       session({ personaId: "hot", exit: { kind: "guardrail", detail: "stuck" } }),
     ];
-    const out = generateAggregate(dirs);
+    const out = generateDetail(dirs);
     assert.match(out, /Completed \| 1/);
     assert.match(out, /Abandoned \| 2/);
     assert.match(out, /Guardrail \| 1/);
     assert.match(out, /\*\*Sessions:\*\* 4/);
+    assert.match(out, /^# Session detail — /m);
   });
 
   it("quotes why people left, verbatim", () => {
-    const out = generateAggregate([
+    const out = generateDetail([
       session({ personaId: "cold", exit: { kind: "abandoned", reason: "pricing was hidden", question: "cost?" } }),
     ]);
     assert.match(out, /What could make people leave/);
@@ -121,13 +146,13 @@ describe("generateAggregate", () => {
       exit: { kind: "abandoned", reason: "r", question: "q" },
       steps: [{ url, confusion: 8, thought: "t" }],
     });
-    const out = generateAggregate([at("https://site.com/pricing"), at("https://site.com/pricing"), at("https://site.com/signup")]);
+    const out = generateDetail([at("https://site.com/pricing"), at("https://site.com/pricing"), at("https://site.com/signup")]);
     assert.match(out, /most likely to stall/);
     assert.match(out, /\/pricing` — 2 of 3/);
   });
 
   it("does not report drop points for sessions that completed", () => {
-    const out = generateAggregate([
+    const out = generateDetail([
       session({ personaId: "hot", exit: { kind: "completed", summary: "done" } }),
     ]);
     assert.ok(!out.includes("most likely to stall"));
@@ -139,7 +164,7 @@ describe("generateAggregate", () => {
       { checkpoint: "found signup", reached: reached1, note: "" },
       { checkpoint: "saw dashboard", reached: reached2, note: "" },
     ];
-    const out = generateAggregate([
+    const out = generateDetail([
       session({ personaId: "cold", exit: { kind: "completed", summary: "d" }, flow: cp(true, true) }),
       session({ personaId: "warm", exit: { kind: "abandoned", reason: "r", question: "q" }, flow: cp(true, false) }),
     ]);
@@ -148,14 +173,14 @@ describe("generateAggregate", () => {
     assert.match(out, /saw dashboard \| 1\/2/);
     assert.match(out, /never got here/);
 
-    const none = generateAggregate([
+    const none = generateDetail([
       session({ personaId: "cold", exit: { kind: "completed", summary: "d" } }),
     ]);
     assert.ok(!none.includes("Flow Funnel"));
   });
 
   it("a malformed flow field degrades to unscored instead of discarding the session", () => {
-    const out = generateAggregate([
+    const out = generateDetail([
       session({ personaId: "cold", exit: { kind: "completed", summary: "d" }, flow: "garbage" }),
     ]);
     assert.match(out, /\*\*Sessions:\*\* 1/);
@@ -163,7 +188,7 @@ describe("generateAggregate", () => {
   });
 
   it("escapes pipes so a quote cannot break the markdown table", () => {
-    const out = generateAggregate([
+    const out = generateDetail([
       session({ personaId: "cold", exit: { kind: "abandoned", reason: "a | b | c", question: "q" } }),
     ]);
     assert.ok(!/\| a \| b \| c \|/.test(out), "an unescaped pipe split the row into extra columns");

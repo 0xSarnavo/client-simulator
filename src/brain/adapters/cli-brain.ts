@@ -2,7 +2,7 @@ import { tmpdir } from "node:os";
 import type { Brain, BrainContext, Decision } from "../../types.js";
 import { DecisionSchema, VerdictSchema } from "../../types.js";
 
-const TIMEOUT_MS = 180_000;
+const TIMEOUT_MS = 300_000;
 /** Attempts per decision. Each attempt is its own CLI call, so this bounds cost. */
 export const MAX_DECIDE_ATTEMPTS = 3;
 /** Backoff after a failed CLI call (rate limit, timeout) — not after a bad reply. */
@@ -53,6 +53,8 @@ export interface CliBrainOptions {
   allowDir?: string;
   /** Whether persona prompts may point this brain at screenshot files */
   readsFiles?: boolean;
+  /** CLI accepts a system prompt, so the static half can sit in the cached prefix */
+  systemPrompt?: boolean;
   /**
    * Extra environment for this brain (e.g. opencode's OPENCODE_CONFIG).
    * Merged over a sanitized allowlist — children never inherit the full
@@ -65,6 +67,8 @@ export interface CliCallOptions {
   model?: string;
   effort?: string;
   allowDir?: string;
+  /** The static half of the persona prompt, when the CLI can take it separately */
+  system?: string;
 }
 
 /**
@@ -123,8 +127,9 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
       return runOnce(prompt);
     },
     async decide(ctx: BrainContext): Promise<Decision> {
-      const { buildPrompt, buildRepairPrompt } = await import("../prompt.js");
-      const basePrompt = buildPrompt(ctx);
+      const { buildPrompt, buildSystemPrompt, buildUserPrompt, buildRepairPrompt } = await import("../prompt.js");
+      const system = opts.systemPrompt ? buildSystemPrompt(ctx) : undefined;
+      const basePrompt = system ? buildUserPrompt(ctx) : buildPrompt(ctx);
       let lastError = "";
       let lastReply = "";
 
@@ -138,7 +143,7 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
 
         let text: string;
         try {
-          text = await runOnce(prompt);
+          text = await runOnce(prompt, system);
         } catch (e) {
           // the call itself failed — likely transient, so back off before retrying
           lastError = (e as Error).message;
@@ -155,16 +160,18 @@ export function makeCliBrain(opts: CliBrainOptions): Brain & {
         lastReply = text;
       }
 
+      // the reply itself is the diagnosis: a usage-limit notice or an error page
+      // looks exactly like "no JSON" unless it is written down
       throw new Error(
-        `${opts.name} failed to produce a valid decision after ${MAX_DECIDE_ATTEMPTS} attempts: ${lastError}`,
+        `${opts.name} failed to produce a valid decision after ${MAX_DECIDE_ATTEMPTS} attempts: ${lastError}${lastReply ? ` — last reply: ${JSON.stringify(lastReply.slice(0, 200))}` : ""}`,
       );
     },
   };
 
-  async function runOnce(prompt: string): Promise<string> {
+  async function runOnce(prompt: string, system?: string): Promise<string> {
     const callStart = Date.now();
     const result = await import("execa").then(({ execa }) =>
-      execa(opts.command, opts.args(prompt, { model: self.model, effort: self.effort, allowDir: self.allowDir }), {
+      execa(opts.command, opts.args(prompt, { model: self.model, effort: self.effort, allowDir: self.allowDir, system }), {
         stdin: "ignore",
         // run outside the project so the CLI does not load this repo's own
         // AGENTS.md/CLAUDE.md into a persona that is meant to know nothing

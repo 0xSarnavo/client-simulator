@@ -23,6 +23,294 @@ mechanical work. If you cannot fill in **Why**, there is no entry to write.
 
 ---
 
+## 2026-09-14 — Alpha hardening: Chromium checked live, patience follows the flow, repeats read as repeats
+
+**Decided:** every visit launches and closes Chromium once before anything
+else, whatever the doctor cache says. A persona's patience is at least
+`2 × checkpoints + 2` when a flow is under test. A queue that stops on a
+step-1 brain failure prints the reply text and says a usage limit looks like
+this. The one-page report says, for any persona run more than once, how many
+runs agreed, and counts owner verdicts from `runs/<site>/VERDICTS.md` (lines
+starting `real:` or `false:`). `RESEARCH-oss-eval.md` moved to `local/` — it
+was a personal dependency survey, not part of the tool.
+
+**Why:** each is a thing that bit today. The doctor cache said Chromium
+launched while playwright 1.63 wanted a build that was not installed. Both
+hot personas ran out of a 10-step patience while correctly working through a
+7-checkpoint signup. Eight sessions died on a usage limit that printed as
+"no JSON". The edge persona's five runs disagreed 2.5/4 and a report that
+shows one of them as the truth would mislead.
+
+**Files:** `src/cli.ts`, `src/doctor.ts`, `src/log/aggregate.ts`,
+`src/log/aggregate.test.ts`, `PLAN.md`, `README.md`, `package.json`
+
+**Ref:** uncommitted
+
+## 2026-09-14 — `--ladder`: the measured fleet as one command
+
+**Decided:** `--ladder` runs the wide sweep (haiku by default, `--wide` to
+split it, e.g. half muse-spark), `--report`, `topSessions()` over the
+replication table (sessions citing the most refs that other sessions also
+cite; walkouts with reasons when nothing replicates yet), the expert panel
+on those three with sonnet, one opus visit as the persona behind the top
+session plus its panel, and the report again over everything.
+
+**Why:** the 96-session eval settled the seats (opus drives, haiku
+corroborates, sonnet verifies, free models parked) and the site-g
+retest settled the counts: haiku agreed with itself 3.80/4 on the hot
+persona (5/5 same exit, same page) and 2.50/4 on the low-tech edge persona
+(all signed up, then wandered). One wide run per persona is enough when the
+filter demands a second citation before a finding counts. Until today the
+ladder was a sequence of hand-typed commands in a local handoff file.
+
+**Wide default is half haiku, half muse-spark**, the operator's call after
+the measurement: with the harness fixes muse ran 5/5 full sessions on
+site-g (0 brain failures, 0 timeouts, 0 stuck-loop kills, three nudges
+all recovered, 4–12 minutes each, one reached the dashboard), where before
+45% of its sessions were harness kills. Its limit is that every exit is
+patience — it never leaves with a reason — so its half of the sweep gives
+votes and trails, and haiku's half gives the quotes. `--wide haiku` restores
+the single-model sweep.
+
+**Files:** `src/cli.ts`, `src/log/replication.ts`, `src/log/replication.test.ts`, `AGENTS.md`
+
+**Ref:** uncommitted
+
+## 2026-09-14 — Calibration is a five-line file, not a connector
+
+**Decided:** `runs/<site>/analytics.json` — exit pages with shares, device
+mix, entry sources, one note — validated by zod and rendered into the
+persona-generation prompt as "what real visitors do". Absent means fully
+synthetic. No PostHog or Clarity code yet.
+
+**Why:** the open question is whether calibrated personas find more true
+problems than synthetic ones (Q6). That test needs one site's numbers, and a
+founder can type five lines from a dashboard in two minutes; a connector is
+a week of plumbing that would be built before knowing whether the numbers
+change anything. The file is also the exact shape a connector would write,
+so nothing is thrown away if the answer is yes.
+
+**Files:** `src/site/analytics.ts` (new), `src/site/analytics.test.ts` (new),
+`src/persona/generate.ts`, `src/cli.ts`, `AGENTS.md`
+
+**Ref:** uncommitted
+
+## 2026-09-14 — Orders: the website stores requests, the operator runs them by hand
+
+**Decided:** the site gets a form (URL, email, consent). `POST /request`
+writes one JSON object per order into a private Railway bucket, keyed by day
+and email hash so a repeat the same day overwrites instead of piling up.
+`GET /orders` and `POST /orders/:id` sit behind a bearer token. The CLI
+lists them (`--orders`) and fulfils one at a time (`--order <id>`): the
+normal pipeline, `--pdf`, one email with the PDF attached through the same
+curl SMTP path `--mailtest` uses, then the order is marked done. `--reject`
+sends one line instead. No poller, no worker, nothing runs on its own.
+
+**Why:** the operator has no API key and a laptop; the website is on
+Railway. A poller that runs whatever arrives makes every spam request cost
+a real run on a personal subscription. A stored order costs a row. The
+S3 signer is 30 lines of `node:crypto` in the server rather than an SDK
+because the site has no dependencies and the bucket is one prefix of small
+JSON files.
+
+**Rejected:** a Railway volume with `orders.json` — the operator chose the
+bucket (survives redeploys and service moves). Also rejected: running the
+order automatically after approval; approval and running are the same
+command on purpose.
+
+**Files:** `src/orders.ts` (new), `src/orders.test.ts` (new), `src/cli.ts`,
+`website/server.mjs`, `website/public/index.html`, `website/public/styles.css`
+(the last three are untracked; the site deploys straight to Railway)
+
+**Ref:** uncommitted
+
+## 2026-09-14 — The mailbox is probed before every run, and the poller reads All Mail
+
+**Decided:** `ensureMailProbe()` runs once a day, only for runs that mint
+mailboxes: mint a box, SMTP one message to it, poll up to 5 minutes, record
+`{ok, latency}` in the state file and on every session's `meta.json`. That
+probe proves SMTP, credentials and the IMAP box — **not** that the catch-all
+forwarder delivers, because Gmail keeps our own Sent copy in All Mail and the
+poller finds it either way (the second review caught this). Inbound delivery
+is proven only by mail from another sender, which `ImapProvider` records as
+`lastInboundAt` whenever a session receives one. After a queue, two or more
+sessions that gave up over email with no inbound mail seen by anyone writes
+`runs/<site>/MAIL-WARNING.md`, and `AGGREGATE.md` opens with an "email
+verdicts unverified" warning. `--mailtest` now exits 1 when nothing
+lands, so `--mailtest && <sweep>` stops. `ImapProvider.foldersToScan` uses
+the `\\All` special-use folder instead of INBOX where the server has one.
+
+**Why:** the first site-g re-run today failed its mailtest — both probes
+were delivered but sat in Gmail's All Mail, because Gmail files a message you
+send to your own address through a forwarder as Sent and never shows it in
+INBOX. The poller scanned INBOX and Junk only, so the check reported "not
+reached within 5 minutes" against a working mailbox, and the chain went on
+to spend a sweep whose email verdicts would have been meaningless. With the
+folder fix the same probes land in 6s and 70s. The probe-before-run exists
+so that this class of failure is stamped on the sessions it affects rather
+than discovered afterwards.
+
+**Rejected:** editing session meta after the run to mark them unverified.
+Sessions are immutable; the marker file and the pre-run stamp carry the same
+information without touching them.
+
+**Also, found by the re-run:** the ImapFlow client had no `error` listener,
+so a socket Gmail dropped between polls (`read ETIMEDOUT`) was an uncaught
+exception that killed the whole process at alex's first inbox check. One
+listener; `withClient` already reconnects on the next call.
+
+**Also:** the per-call brain timeout went 180s → 300s for every CLI (the
+free models sit near 2 min/step). With three attempts and brain time waived
+from the session clock, a hung CLI can now cost 15 minutes per step with no
+session ceiling; acceptable until a run shows it, then cap total waived time.
+
+**Files:** `src/mail/imap.ts`, `src/doctor.ts`, `src/cli.ts`,
+`src/brain/adapters/cli-brain.ts`, `src/log/aggregate.ts`, `AGENTS.md`
+
+**Ref:** uncommitted
+
+## 2026-09-14 — A ruler next to every persona: mechanical page checks
+
+**Decided:** every snapshot now carries an audit — controls the accessibility
+tree exposes with no name, visible controls under 24px on a side (WCAG 2.5.8),
+whether the document is wider than the viewport, whether a viewport meta tag
+exists. `measure()` already resolved every ref's rect, so sizes cost nothing
+extra; the layout facts are one `page.evaluate`. The session records the audit
+on the first step that lands on each URL, and the short report unions them
+per page under "Measured on the page". No dependency added.
+
+**Why:** the eval's strongest finding — site-c' four unnamed signup buttons —
+took 14 sessions across 5 models to establish, and a screen-reader persona to
+notice at all. A ruler finds it on the first page load, and a finding with a
+measurement beside it ("28×28px, minimum 24") is the tier the owner can
+verify without trusting any persona. It is also what separates "the persona
+felt lost" from "the button is too small to tap".
+
+**Rejected:** axe-core. One dependency for ~90 rules, most of which produce
+noise the report would then have to filter; the four checks here are the
+ones the sweep actually needed. Add it when a check is wanted that a few
+lines cannot do.
+
+**Files:** `src/browser/audit.ts` (new), `src/browser/audit.test.ts` (new),
+`src/browser/driver.ts`, `src/session.ts`, `src/types.ts`,
+`src/log/aggregate.ts`, `AGENTS.md`
+
+**Ref:** uncommitted
+
+## 2026-09-14 — The persona prompt is two halves, and AGGREGATE.md is one page
+
+**Decided:** `buildPrompt` is now `buildSystemPrompt` + `buildUserPrompt`. The
+system half — who the persona is, how to behave, the rules, the reply schema —
+never changes within a session; claude gets it through `--append-system-prompt`
+so the CLI's prompt cache covers it, and brains without a system flag get the
+two halves joined as before. The user half is what changes per step: URL, step
+number, screenshot path, inbox, failed-action hint, history, the page.
+
+`AGGREGATE.md` became the short report a site owner reads: one number, the
+top three pages prospects walked out of with who, one quote and a "check it
+yourself" line built from the last two thoughts, the crawler's broken links, a
+developer section with element refs tiered by how many sessions cite them
+(and a "seen once, not counted" list), and the map's unreached count. Every
+table that used to be the aggregate is `DETAIL.md`. Every rendered file ends
+with the same watermark line; PDFs carry it in the footer. Nothing here calls
+a model.
+
+**Why:** one opus session measured 92% of its cost in cache writes and 2% in
+output; the whole prompt was one user message that changed every step, so
+none of ours was ever cached. A live call confirmed the appended system prompt
+is written once (`cache_creation_input_tokens` 5596, 1h TTL) and read after.
+On reports: the operator's own judgement of the old aggregate was "data
+dump"; the three hand-written BRIEF.md files were what a founder actually got
+sent, and their shape is what the short report copies. The "seen once" list
+is there so the owner sees what was filtered, not just what survived.
+
+**Paid for twice:** the retest run hit the subscription's usage limit mid-queue.
+Every call for ~30 minutes returned a notice instead of JSON; the harness
+filed it as "no JSON object found", three attempts, next persona — eight
+sessions gone in minutes, each recorded as its own brain failure. Now a
+brain that fails before step 1 stops the rest of the queue ("the brain is not
+answering; rerun later"), and the error carries the first 200 characters of
+the reply, so the next outage names itself.
+
+**Paid for once already:** the first user half began with `- Current URL:`,
+and `claude -p "<prompt>"` read the leading dash as an option (`unknown
+option`). Ten sessions died at step 1 with zero calls before anyone noticed.
+The user half now opens with a heading, the claude adapter prefixes a space
+to any dash-leading prompt, and a test asserts neither half starts with `-`.
+
+**Rejected:** an LLM-written brief as the default report. It is the paid
+deliverable and it can invent; the mechanical page is always true. Also
+rejected: schema instructions repeated in the user half for small models —
+one line pointing at the system half costs nothing and the schema stays
+cached.
+
+**Files:** `src/brain/prompt.ts`, `src/brain/adapters/cli-brain.ts`,
+`src/brain/adapters/claude.ts`, `src/log/aggregate.ts`, `src/log/report.ts`,
+`src/log/pdf.ts`, `src/cli.ts`, `AGENTS.md`
+
+**Ref:** uncommitted
+
+## 2026-09-14 — A `map` stage: the crawler's view of the site, so the aggregate can say what nobody found
+
+**Decided:** a new stage between `site` and `personas`. `mapSite()` crawls two
+clicks from the landing page plus `sitemap.xml`, same registrable domain only,
+200 pages at most, no brain. Every page is tagged by kind (booking, payment,
+auth, app, pricing, legal, docs, blog, marketing) from its URL, and off-site
+booking or payment links are recorded without being crawled. `runs/<site>/
+map.json` is the machine copy, `MAP.md` the readable one. The aggregate then
+adds three sections: booking and payment surfaces and whether any prospect
+reached them, links the crawler found broken (404 or no page), and pages no
+prospect ever landed on, grouped by kind.
+
+**Why:** the reports could say where prospects walked out but not what they
+never saw. On site-c.com the first crawl listed 104 of 116 pages that 28
+sessions never touched, and 9 docs links that return 404 — a prospect who
+clicks one is stuck, and no session had happened to. Booking and payment pages
+are the ones the guard refuses to commit on, so knowing they exist before a run
+says what "reached the wall" will look like.
+
+**Paid for on the first real site:** site-g's sitemap alone filled the
+200-page cap, so the crawl found nothing new and the console, privacy and
+terms pages were dropped — the crawl now runs first and the sitemap fills what
+is left. And 24 pages the crawler could not render in 15s were reported as
+broken links; a page that failed to render now gets one plain request, and
+only a 4xx/5xx or an unreachable host counts as broken. A docs page whose path
+says `/billing` is documentation, not a checkout — the same confusion the URL
+blocklist died of.
+
+**Known limit, accepted:** the crawler follows `<a href>`. A control that
+navigates from JavaScript (site-c' "Book a Demo" is not an anchor in headless
+Chromium) is invisible to it, and to `sitemap.xml`. The personas run in the same
+browser, so the map and the sessions disagree only where a human would see
+something neither does.
+
+**Rejected:** giving the map to personas. A prospect who knows the site's page
+list is not a first-time visitor — the same reason cold personas never see the
+brief.
+
+**Files:** `src/site/map.ts` (new), `src/site/map.test.ts` (new), `src/cli.ts`,
+`src/log/aggregate.ts`, `AGENTS.md`
+
+**Ref:** uncommitted
+
+## 2026-09-09 — Email patience raised to 5 minutes; mailtest sends staggered probes
+
+**Decided:** persona email patience now defaults to 300s (presets 300/330/360,
+was 120/180/240), and `--mailtest` sends two SMTP probes at t=0 and t=60s,
+prints each arrival's latency, and waits 5 minutes before declaring mail
+"not reached within 5 minutes".
+
+**Why:** real deliveries have taken up to 5 minutes. A persona that gives up
+at 2–4 minutes files "the email never arrived" against a site whose email was
+in flight — the exact false positive that produced seven wrong findings once
+already. One probe at t=0 also proves nothing about whether delivery still
+works a minute in; two staggered probes with measured latency do.
+
+**Files:** `src/persona/presets.ts`, `src/persona/load.ts`, `src/session.ts`,
+`src/cli.ts`, `AGENTS.md`
+
+**Ref:** uncommitted
+
 ## 2026-09-08 — `--goal`: pass/fail instead of "how did it feel"
 
 **Decided:** `--goal "<text>"` runs the queue as a goal test: every queued

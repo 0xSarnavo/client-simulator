@@ -33,9 +33,11 @@ const MAX_BODY_BYTES = 256 * 1024;
 export class ImapProvider implements MailProvider {
   readonly kind = "imap";
   private seen = new Map<string, Set<string>>();
+  /** when a message from another sender last arrived — the only honest proof inbound delivery works */
+  lastInboundAt?: Date;
   private client?: ImapFlowClient;
   private connecting?: Promise<ImapFlowClient>;
-  private junkFolders?: string[];
+  private scanFolders?: string[];
 
   constructor(private cfg: ImapConfig) {}
 
@@ -52,6 +54,10 @@ export class ImapProvider implements MailProvider {
         auth: { user: this.cfg.user, pass: this.cfg.pass },
         logger: false,
       });
+      // an idle socket Gmail drops mid-session emits 'error' with no listener,
+      // which is an uncaught exception that took a whole 10-persona run down;
+      // with a listener the next call fails normally and withClient reconnects
+      c.on("error", () => { if (this.client === c) this.client = undefined; });
       await c.connect();
       return c;
     })();
@@ -96,17 +102,23 @@ export class ImapProvider implements MailProvider {
 
   /** INBOX plus spam/junk folders. Trash is deliberately excluded —
    *  anything in Trash is already destroyed (Gmail purges Bin after 30 days). */
+  /**
+   * Gmail files a message you send to your own address through a forwarder
+   * under Sent/All Mail and never shows it in INBOX — which made every
+   * mailtest self-probe look undelivered. The \\All folder holds everything
+   * but Spam and Trash, so where it exists it replaces INBOX; Junk is added
+   * either way.
+   */
   private async foldersToScan(c: ImapFlowClient): Promise<string[]> {
-    if (this.junkFolders) return ["INBOX", ...this.junkFolders];
+    if (this.scanFolders) return this.scanFolders;
+    let all: string | null = null;
     const junk: string[] = [];
-    const folders = await c.list();
-    for (const f of folders) {
-      if (f.specialUse === "\\Junk") {
-        junk.push(f.path);
-      }
+    for (const f of await c.list()) {
+      if (f.specialUse === "\\All") all = f.path;
+      if (f.specialUse === "\\Junk") junk.push(f.path);
     }
-    this.junkFolders = junk;
-    return ["INBOX", ...junk];
+    this.scanFolders = [all ?? "INBOX", ...junk];
+    return this.scanFolders;
   }
 
   async fetchNew(box: Mailbox): Promise<MailMessage[]> {
@@ -140,6 +152,9 @@ export class ImapProvider implements MailProvider {
             const env = msg.envelope;
 
             this.seenFor(box).add(key);
+            // a probe we sent ourselves shows up here too (Gmail keeps the Sent copy in
+            // All Mail); only mail from someone else proves the forwarder delivered
+            if (env?.from?.[0]?.address?.toLowerCase() !== this.cfg.user.toLowerCase()) this.lastInboundAt = new Date();
             const { text, html } = await this.readBody(
               c,
               uid,

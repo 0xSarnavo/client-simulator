@@ -18,6 +18,8 @@ import { CURSOR_SCRIPT } from "./cursor.js";
  * which is exactly what happened on both site-d.ai and site-c.com.
  * maxLength is -1 on fields that set no limit.
  */
+import { smallTargets, unnamedControls, type PageAudit } from "./audit.js";
+
 export function needsKeystrokes(maxLength: number, textLength: number): boolean {
   return maxLength > 0 && maxLength < textLength;
 }
@@ -33,6 +35,9 @@ export function chooseRecording<T extends { file: string; size: number }>(
 export interface RefVisibility {
   /** transparent or zero-size — in the tree, invisible to a person */
   hidden: boolean;
+  /** rendered size in CSS px, for the tap-target audit */
+  w?: number;
+  h?: number;
   /** starts below the fold; reaching it requires scrolling */
   belowFold: boolean;
   /** intersects the viewport as it is scrolled right now */
@@ -42,6 +47,8 @@ export interface RefVisibility {
 export interface PageSnapshot {
   ariaYaml: string;
   url: string;
+  /** what a ruler says about this page; see browser/audit.ts */
+  audit: PageAudit;
   /** ref -> where it sits relative to the viewport. See BrowserDriver.measure. */
   visibility: Record<string, RefVisibility>;
   /** How far down the page is scrolled. Distinguishes "still moving" from "stuck at the bottom". */
@@ -139,7 +146,18 @@ export class BrowserDriver {
       .catch(() => 0);
 
     this.lastVisibility = await this.measure(ariaYaml);
-    return { ariaYaml, url: this.page.url(), visibility: this.lastVisibility, scrollY };
+    const layout = await this.page
+      .evaluate(() => ({
+        overflowX: document.documentElement.scrollWidth > window.innerWidth + 1,
+        viewportMeta: !!document.querySelector('meta[name="viewport"]'),
+      }))
+      .catch(() => ({ overflowX: false, viewportMeta: true }));
+    const audit: PageAudit = {
+      unnamed: unnamedControls(ariaYaml, this.lastVisibility),
+      small: smallTargets(ariaYaml, this.lastVisibility),
+      ...layout,
+    };
+    return { ariaYaml, url: this.page.url(), visibility: this.lastVisibility, scrollY, audit };
   }
 
   /**
@@ -201,6 +219,8 @@ export class BrowserDriver {
       }
       return {
         hidden: (r.width === 0 && r.height === 0) || opacity < 0.05,
+        w: Math.round(r.width),
+        h: Math.round(r.height),
         belowFold: r.top >= window.innerHeight,
         onScreen: r.bottom > 0 && r.top < window.innerHeight && r.right > 0 && r.left < window.innerWidth,
       };

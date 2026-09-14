@@ -36,6 +36,8 @@ export interface GenerateOptions {
   siteContext?: string;
   /** the flow under test — persona goals become variations of it */
   flowContext?: string;
+  /** real-visitor numbers from the site's own analytics, rendered by site/analytics.ts */
+  analyticsContext?: string;
 }
 
 export interface GeneratedPersona extends z.infer<typeof GeneratedPersonaSchema> {
@@ -95,6 +97,14 @@ ${opts.flowContext}
 Every persona's goal must be a personal variation of this flow — their own
 reason for attempting it, their own COMPLETE condition within it. Edge personas
 may fail or bail early, but they still enter through this flow.
+`
+    : ""
+}
+${
+  opts.analyticsContext
+    ? `
+WHAT REAL VISITORS DO (from the site's own analytics — these are facts, weight the set toward them):
+${opts.analyticsContext}
 `
     : ""
 }

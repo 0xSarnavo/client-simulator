@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { extractRefs, replicationTable, renderReplication } from "./replication.js";
+import { extractRefs, replicationTable, renderReplication, topSessions } from "./replication.js";
 import type { RefSighting } from "./replication.js";
 
 describe("extractRefs", () => {
@@ -61,5 +61,18 @@ describe("replicationTable", () => {
     );
     assert.match(out, /`f1e33` \| replicated 2 models/);
     assert.match(out, /`e9` \| single-source/);
+  });
+});
+
+describe("topSessions", () => {
+  it("ranks sessions by how many replicated refs they cite, ignoring single-source ones", () => {
+    const sightings = [
+      { ref: "e1", site: "x.com", sessionDir: "a", model: "haiku", source: "trail" as const },
+      { ref: "e1", site: "x.com", sessionDir: "b", model: "haiku", source: "trail" as const },
+      { ref: "e2", site: "x.com", sessionDir: "b", model: "haiku", source: "trail" as const },
+      { ref: "e2", site: "x.com", sessionDir: "c", model: "haiku", source: "trail" as const },
+      { ref: "e9", site: "x.com", sessionDir: "d", model: "haiku", source: "fixes" as const },
+    ];
+    assert.deepEqual(topSessions(sightings, replicationTable(sightings), 2), ["b", "a"]);
   });
 });

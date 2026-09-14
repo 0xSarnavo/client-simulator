@@ -6,7 +6,7 @@ export const COLD_PERSONA: Persona = {
   goal: "Figure out what this product actually does. Sign up only if genuinely convinced it is worth it.",
   tech_comfort: "low",
   patience_steps: 12,
-  otp_patience_seconds: 120,
+  otp_patience_seconds: 300,
   max_confusion_before_bail: 8,
   traits: [
     "distrusts anything asking for payment details early",
@@ -24,7 +24,7 @@ export const WARM_PERSONA: Persona = {
   goal: "Evaluate whether this product solves my problem well enough to commit to it.",
   tech_comfort: "medium",
   patience_steps: 18,
-  otp_patience_seconds: 180,
+  otp_patience_seconds: 330,
   max_confusion_before_bail: 9,
   traits: [
     "compares alternatives mentally - looks for pricing and features",
@@ -42,7 +42,7 @@ export const HOT_PERSONA: Persona = {
   goal: "Sign up and start using the product right now. I already decided I want something like this.",
   tech_comfort: "high",
   patience_steps: 26,
-  otp_patience_seconds: 240,
+  otp_patience_seconds: 360,
   max_confusion_before_bail: 10,
   traits: [
     "goes straight for the signup / get started button",

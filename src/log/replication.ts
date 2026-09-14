@@ -157,3 +157,17 @@ export function renderReplication(rows: ReplicationRow[]): string {
   }
   return lines.join("\n") + "\n";
 }
+
+/**
+ * The sessions worth a verifier's time: those citing the most refs that other
+ * sessions also cite. A session full of single-source refs ranks last.
+ */
+export function topSessions(sightings: RefSighting[], rows: ReplicationRow[], n = 3): string[] {
+  const replicated = new Set(rows.filter((r) => r.sessions >= 2).map((r) => `${r.site}${r.ref}`));
+  const score = new Map<string, number>();
+  for (const s of sightings) {
+    if (!replicated.has(`${s.site}${s.ref}`)) continue;
+    score.set(s.sessionDir, (score.get(s.sessionDir) ?? 0) + 1);
+  }
+  return [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([d]) => d);
+}

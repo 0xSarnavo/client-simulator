@@ -38,7 +38,7 @@ describe("getPersonaRegistry", () => {
     const p = getPersonaRegistry().personas["budget-bianca"];
     assert.equal(p.tech_comfort, "medium");
     assert.equal(p.patience_steps, 12);
-    assert.equal(p.otp_patience_seconds, 180);
+    assert.equal(p.otp_patience_seconds, 300);
     assert.deepEqual(p.traits, []);
   });
 

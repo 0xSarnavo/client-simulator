@@ -1,5 +1,6 @@
 import type { Persona, StepEvent, ExitReason } from "../types.js";
 import type { FlowScore } from "../site/flow.js";
+import { siteSlug } from "../runs.js";
 
 /** Wall-clock the journey took, from the timestamps already on every event. */
 export function journeySeconds(events: StepEvent[]): number | null {
@@ -15,6 +16,11 @@ function durationSuffix(events: StepEvent[]): string {
   if (total === null) return "";
   const avg = Math.round(total / Math.max(events.length - 1, 1));
   return ` over ${fmtDuration(total)} (~${avg}s per step)`;
+}
+
+/** Every report carries who made it and how to read it — the same line, everywhere. */
+export function watermark(site: string): string {
+  return `\n---\n*client-simulator · ${site} · ${new Date().toISOString().slice(0, 10)} · simulated prospects: risk signals, not measured traffic*\n`;
 }
 
 export function fmtDuration(seconds: number): string {
@@ -131,6 +137,7 @@ export function generateReport(opts: {
     lines.push("");
   }
 
+  lines.push(watermark(siteSlug(url)));
   return lines.join("\n");
 }
 

@@ -181,6 +181,8 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
       screenshot: screenshotPath || undefined,
       decision,
       scrollY: snap.scrollY,
+      // the ruler's view of a page, once per page — the aggregate unions them
+      audit: events.some((e) => e.url === snap.url) ? undefined : snap.audit,
     };
 
     // Looking around is not an attempt. Only decisions draw down patience.
@@ -255,7 +257,7 @@ export async function runSession(opts: SessionOptions): Promise<SessionResult> {
       const pollStart = Date.now();
       const check = await checkInbox(opts, waitSeconds, () => {
         emailWaitSeconds += waitSeconds;
-        return emailWaitSeconds > (persona.otp_patience_seconds ?? 180);
+        return emailWaitSeconds > (persona.otp_patience_seconds ?? 300);
       });
       waivedMs += Date.now() - pollStart;
       if (check.mail) arrivedMail = check.mail;

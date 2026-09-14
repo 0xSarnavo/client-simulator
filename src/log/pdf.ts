@@ -177,7 +177,16 @@ export async function htmlToPdf(html: string, outPath: string): Promise<string> 
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "load" });
-    await page.pdf({ path: outPath, format: "A4", printBackground: true });
+    await page.pdf({
+      path: outPath,
+      format: "A4",
+      printBackground: true,
+      displayHeaderFooter: true,
+      headerTemplate: "<span></span>",
+      footerTemplate:
+        '<div style="font-size:8px;color:#888;width:100%;text-align:center;">client-simulator · simulated prospects: risk signals, not measured traffic · <span class="pageNumber"></span>/<span class="totalPages"></span></div>',
+      margin: { top: "16mm", bottom: "16mm" },
+    });
     return outPath;
   } finally {
     await browser.close().catch(() => {});
