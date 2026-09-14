@@ -6,6 +6,13 @@ tags `v<version>`, and publishes the same text as a GitHub Release.
 
 ## Unreleased
 
+**Rebrand to Leakdown.** The bin is `leakdown` (was `client-simulator`).
+Env vars are `LEAKDOWN_*` — `LEAKDOWN_IMAP_HOST/USER/PASS`,
+`LEAKDOWN_MAIL_DOMAIN`, `LEAKDOWN_ORDERS_URL/TOKEN` — with the old
+`CLIENTSIM_*` names still working for one minor with a deprecation
+warning. Machine-local state moved to `.leakdown-state.json`.
+`package-lock.json` is committed, so installs are reproducible.
+
 ## 0.5.0 — 2026-09-14
 
 **Where runs land.** One folder per CLI invocation: `runs/<site>/<date>/<time>/`,
