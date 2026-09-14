@@ -10,31 +10,31 @@
  */
 export const CURSOR_SCRIPT = `
 (() => {
-  if (window.__clientsimCursor) return;
-  window.__clientsimCursor = true;
+  if (window.__leakdownCursor) return;
+  window.__leakdownCursor = true;
 
   const install = () => {
-    if (!document.body || document.getElementById("__clientsim_cursor")) return;
+    if (!document.body || document.getElementById("__leakdown_cursor")) return;
 
     const style = document.createElement("style");
     style.textContent = \`
-      #__clientsim_cursor, .__clientsim_ping {
+      #__leakdown_cursor, .__leakdown_ping {
         position: fixed; pointer-events: none; z-index: 2147483647;
         border-radius: 50%; will-change: transform;
       }
-      #__clientsim_cursor {
+      #__leakdown_cursor {
         width: 18px; height: 18px; margin: -9px 0 0 -9px;
         border: 2px solid rgba(0,0,0,.85);
         background: rgba(255,255,255,.55);
         box-shadow: 0 0 0 1px rgba(255,255,255,.9);
         transition: transform .04s linear;
       }
-      .__clientsim_ping {
+      .__leakdown_ping {
         width: 14px; height: 14px; margin: -7px 0 0 -7px;
         border: 2px solid rgba(220,0,0,.9);
-        animation: __clientsim_ping .5s ease-out forwards;
+        animation: __leakdown_ping .5s ease-out forwards;
       }
-      @keyframes __clientsim_ping {
+      @keyframes __leakdown_ping {
         from { transform: scale(1); opacity: 1; }
         to   { transform: scale(3.2); opacity: 0; }
       }
@@ -42,7 +42,7 @@ export const CURSOR_SCRIPT = `
     document.head?.appendChild(style);
 
     const dot = document.createElement("div");
-    dot.id = "__clientsim_cursor";
+    dot.id = "__leakdown_cursor";
     dot.setAttribute("aria-hidden", "true");
     dot.setAttribute("role", "presentation");
     dot.style.left = "-100px";
@@ -56,7 +56,7 @@ export const CURSOR_SCRIPT = `
 
     addEventListener("mousedown", (e) => {
       const ping = document.createElement("div");
-      ping.className = "__clientsim_ping";
+      ping.className = "__leakdown_ping";
       ping.setAttribute("aria-hidden", "true");
       ping.setAttribute("role", "presentation");
       ping.style.left = e.clientX + "px";

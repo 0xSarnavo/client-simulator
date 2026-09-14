@@ -51,7 +51,7 @@ export function setOrderStatus(id: string, status: Order["status"], note = ""): 
 
 /** A plain-text email with one PDF attached, as raw MIME for curl's SMTP upload. */
 export function mimeWithAttachment(opts: { from: string; to: string; subject: string; text: string; pdfPath?: string }): string {
-  const boundary = `cs-${Date.now().toString(36)}`;
+  const boundary = `ld-${Date.now().toString(36)}`;
   // header values come from order fields someone typed into a website form: no line breaks, ever
   const h = (v: string) => v.replace(/[\r\n]+/g, " ");
   const head = [`From: ${h(opts.from)}`, `To: ${h(opts.to)}`, `Subject: ${h(opts.subject)}`, `Date: ${new Date().toUTCString()}`, `MIME-Version: 1.0`];

@@ -7,7 +7,7 @@ import { PERSONAS } from "./presets.js";
 
 // load.ts resolves personas/ once at import time, so the scratch dir has to be
 // in place and current *before* the module is pulled in
-const scratch = mkdtempSync(join(tmpdir(), "clientsim-personas-"));
+const scratch = mkdtempSync(join(tmpdir(), "leakdown-personas-"));
 const cwd = process.cwd();
 mkdirSync(join(scratch, "personas"), { recursive: true });
 process.chdir(scratch);

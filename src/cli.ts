@@ -185,14 +185,14 @@ function setupMail(): { provider: MailProvider } | null {
 }
 
 function printUsage() {
-  console.log(`client-simulator — simulated prospects walk your signup and say where they gave up
+  console.log(`leakdown — simulated prospects walk your signup and say where they gave up
 
-  client-simulator <url> --ladder --yes --headless   the full run, about an hour
-  client-simulator <url>                             a plain run, one model, menus for the rest
-  client-simulator <url> --goal "sign up and get an API key" --steps 15 --yes   pass/fail for CI
+  leakdown <url> --ladder --yes --headless   the full run, about an hour
+  leakdown <url>                             a plain run, one model, menus for the rest
+  leakdown <url> --goal "sign up and get an API key" --steps 15 --yes   pass/fail for CI
 
   Then read runs/<site>/AGGREGATE.md (the one-page report) and REPORT.md beside it.
-  client-simulator --history shows every run with its one number. Bare "client-simulator"
+  leakdown --history shows every run with its one number. Bare "leakdown"
   opens a guided flow.
 
 STAGES, in order:
@@ -310,7 +310,7 @@ function parseCommon(argv: string[]): CommonArgs {
   const value = (i: number, flag: string): string => {
     const v = argv[i];
     if (v === undefined || v.startsWith("--")) {
-      console.error(`${flag} needs a value. See \`client-simulator --help\`.`);
+      console.error(`${flag} needs a value. See \`leakdown --help\`.`);
       process.exit(1);
     }
     return v;
@@ -1070,7 +1070,7 @@ function history(site?: string): void {
       console.log(`    ${date} ${time}  ${(oneNumber(run) ?? "no report yet").padEnd(34)} ${seatsOf(run)}${existsSync(`${run}/REPORT.md`) ? "  REPORT.md" : ""}`);
     }
   }
-  console.log(`\n  Open: runs/<site>/<date>/<time>/AGGREGATE.md — or client-simulator --fix <site> for the newest run.\n`);
+  console.log(`\n  Open: runs/<site>/<date>/<time>/AGGREGATE.md — or leakdown --fix <site> for the newest run.\n`);
 }
 
 /** The result a person came for, in the terminal: the one number and the first wall. */
@@ -1156,7 +1156,7 @@ async function report(dirs: string[] | undefined, force = false) {
   const targets = dirs?.length ? dirs : findSessionDirs();
   if (targets.length === 0) {
     console.error(
-      "Nothing to report on. Stage 2 needs stage 1 output — run `client-simulator visit <url>` first.",
+      "Nothing to report on. Stage 2 needs stage 1 output — run `leakdown visit <url>` first.",
     );
     process.exit(1);
   }
@@ -1245,7 +1245,7 @@ async function pdf(sites: string[], model?: string) {
         .map((s) => `https://${s}`);
 
   if (targets.length === 0) {
-    console.error("Nothing to render. Run a site first, or pass site names: client-simulator --pdf site-a.dev");
+    console.error("Nothing to render. Run a site first, or pass site names: leakdown --pdf site-a.dev");
     process.exit(1);
   }
 
@@ -1360,8 +1360,8 @@ async function runOrder(id: string, common: CommonArgs, reject?: string): Promis
   }
   const order = await getOrder(id);
   if (reject !== undefined) {
-    const text = `Hi,\n\nWe could not run client-simulator against ${order.url}: ${reject || "no reason given"}.\n\n— client-simulator`;
-    if (!(await smtpSend(order.email, mimeWithAttachment({ from: cfg.user, to: order.email, subject: `client-simulator: ${siteSlug(normalizeUrl(order.url))}`, text })))) {
+    const text = `Hi,\n\nWe could not run leakdown against ${order.url}: ${reject || "no reason given"}.\n\n— leakdown`;
+    if (!(await smtpSend(order.email, mimeWithAttachment({ from: cfg.user, to: order.email, subject: `leakdown: ${siteSlug(normalizeUrl(order.url))}`, text })))) {
       console.error("  email failed; order left as is");
       process.exit(1);
     }
@@ -1380,8 +1380,8 @@ async function runOrder(id: string, common: CommonArgs, reject?: string): Promis
     console.error(`  no PDF at ${out}; order left as is`);
     process.exit(1);
   }
-  const text = `Hi,\n\nAttached is what simulated prospects hit on ${url}. Read it as risk signals, not measured traffic: each finding names the page, who walked out, and how to check it yourself.\n\nReply to this email with what was right and what was not — that is how the tool gets better.\n\n— client-simulator`;
-  if (!(await smtpSend(order.email, mimeWithAttachment({ from: cfg.user, to: order.email, subject: `client-simulator report: ${siteSlug(url)}`, text, pdfPath: out })))) {
+  const text = `Hi,\n\nAttached is what simulated prospects hit on ${url}. Read it as risk signals, not measured traffic: each finding names the page, who walked out, and how to check it yourself.\n\nReply to this email with what was right and what was not — that is how the tool gets better.\n\n— leakdown`;
+  if (!(await smtpSend(order.email, mimeWithAttachment({ from: cfg.user, to: order.email, subject: `leakdown report: ${siteSlug(url)}`, text, pdfPath: out })))) {
     console.error("  email failed; order left as new so you can retry");
     process.exit(1);
   }
@@ -1393,7 +1393,7 @@ async function runOrder(id: string, common: CommonArgs, reject?: string): Promis
 async function fix(dirs: string[], common: CommonArgs, force = false, outDir?: string) {
   if (dirs.length === 0) {
     console.error(
-      "Usage: client-simulator fix <dir> [moreDirs...] [--brain ...] [--force]",
+      "Usage: leakdown fix <dir> [moreDirs...] [--brain ...] [--force]",
     );
     process.exit(1);
   }
@@ -1408,7 +1408,7 @@ async function fix(dirs: string[], common: CommonArgs, force = false, outDir?: s
   if (!force && ungated.length > 0) {
     const missing = [...new Set(ungated.map((s) => aggregatePathFor(s.meta.url)))];
     console.error(
-      `Stage 3 needs stage 2 — missing ${missing.join(", ")}. Run \`client-simulator report\` first (or add --force to skip the aggregate).`,
+      `Stage 3 needs stage 2 — missing ${missing.join(", ")}. Run \`leakdown report\` first (or add --force to skip the aggregate).`,
     );
     process.exit(1);
   }
@@ -1621,7 +1621,7 @@ async function smtpSend(to: string, mime: string): Promise<boolean> {
 async function smtpSelfSend(to: string, label = "probe 1"): Promise<boolean> {
   const cfg = mailConfig();
   if (!cfg) return false;
-  return smtpSend(to, mimeWithAttachment({ from: cfg.user, to, subject: `client-simulator mailtest ${label}`, text: "Your verification code is 424242." }));
+  return smtpSend(to, mimeWithAttachment({ from: cfg.user, to, subject: `leakdown mailtest ${label}`, text: "Your verification code is 424242." }));
 }
 
 /**
@@ -1819,7 +1819,7 @@ async function personasGenerate(rest: string[]) {
   // a scraped site is enough on its own — the audience is inferred from the page
   if (!description && !site) {
     console.error(
-      '\n  Need either a site to scrape or a description of who this is for:\n    client-simulator personas generate --site https://yoursite.com\n    client-simulator personas generate --from "CTOs at Series B startups"',
+      '\n  Need either a site to scrape or a description of who this is for:\n    leakdown personas generate --site https://yoursite.com\n    leakdown personas generate --from "CTOs at Series B startups"',
     );
     process.exit(1);
   }
@@ -1838,7 +1838,7 @@ async function personasGenerate(rest: string[]) {
     console.log(`\n  ✓ ${written.length} persona file(s) written to personas/:`);
     for (const p of written) console.log(`    ${p.id}.yaml — ${p.name} (${p.temperature})`);
     console.log(`\n  Run them:`);
-    console.log(`    client-simulator visit <url> --persona ${written.map((p) => p.id).join(",")}\n`);
+    console.log(`    leakdown visit <url> --persona ${written.map((p) => p.id).join(",")}\n`);
   } catch (e) {
     console.error(`\n  generation failed: ${(e as Error).message.slice(0, 200)}\n`);
     process.exit(1);
@@ -1953,7 +1953,7 @@ async function newPersonaInteractive(name: string): Promise<void> {
   console.log(
     scope
       ? `  It will be offered automatically when you test ${scope}.\n`
-      : `  Use it anywhere:  client-simulator <url> --persona ${id}\n`,
+      : `  Use it anywhere:  leakdown <url> --persona ${id}\n`,
   );
 }
 
@@ -1962,13 +1962,13 @@ function personasCommand(args: string[]) {
     const nameIdx = args.indexOf("--new");
     const name = args[nameIdx + 1];
     if (!name || name.startsWith("--")) {
-      console.error("Usage: client-simulator --new-persona \"Persona Name\"");
+      console.error("Usage: leakdown --new-persona \"Persona Name\"");
       process.exit(1);
     }
     try {
       const path = newPersonaFile(name);
       console.log(`\n  ✓ created ${path}`);
-      console.log(`  Edit it, then use: client-simulator <url> --persona ${path.split("/").pop()?.replace(/\.yaml$/, "")}\n`);
+      console.log(`  Edit it, then use: leakdown <url> --persona ${path.split("/").pop()?.replace(/\.yaml$/, "")}\n`);
     } catch (e) {
       console.error((e as Error).message);
       process.exit(1);
@@ -2011,8 +2011,8 @@ function personasCommand(args: string[]) {
     for (const e of errors) console.log(`    ${e.file}: ${e.error}`);
   }
   console.log(
-    `\n  New one:  client-simulator --new-persona "My Persona"   (asks a few questions)` +
-      `\n  Or let it build a set for a site:  client-simulator <url> --stop personas\n`,
+    `\n  New one:  leakdown --new-persona "My Persona"   (asks a few questions)` +
+      `\n  Or let it build a set for a site:  leakdown <url> --stop personas\n`,
   );
 }
 
@@ -2036,7 +2036,7 @@ async function wizard() {
     process.exit(1);
   }
 
-  heading("client-simulator");
+  heading("leakdown");
   const action = await select({
     message: "What do you want to do?",
     choices: [
@@ -2245,7 +2245,7 @@ async function main() {
   if (argv.includes("--ladder")) {
     const url = positionals[0];
     if (!url) {
-      console.error("--ladder needs a site: client-simulator <url> --ladder");
+      console.error("--ladder needs a site: leakdown <url> --ladder");
       process.exit(1);
     }
     return void (await ladder(normalizeUrl(url), common));
@@ -2266,7 +2266,7 @@ async function main() {
 
   const url = positionals[0];
   if (!url) {
-    console.error("Give me a URL: client-simulator <url>. See --help.");
+    console.error("Give me a URL: leakdown <url>. See --help.");
     process.exit(1);
   }
   await all(normalizeUrl(url), common);
@@ -2291,10 +2291,10 @@ async function legacy(command: string, rest: string[]) {
 
   switch (command) {
     case "visit":
-      await visit(needUrl("Usage: client-simulator <url> [--persona cold,warm,hot]"), common);
+      await visit(needUrl("Usage: leakdown <url> [--persona cold,warm,hot]"), common);
       break;
     case "all":
-      await all(needUrl("Usage: client-simulator <url> [--persona cold,warm,hot]"), common);
+      await all(needUrl("Usage: leakdown <url> [--persona cold,warm,hot]"), common);
       break;
     case "report":
       await report(positionals.length ? positionals : undefined, force);

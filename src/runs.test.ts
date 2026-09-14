@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { after, describe, it } from "node:test";
 import { dirLabel, findSessionDirs, modelSlug, newRunDir, runDirOf, runDirs, seatOf, sessionPath, siteSlug } from "./runs.js";
 
-const scratch = mkdtempSync(join(tmpdir(), "clientsim-runs-"));
+const scratch = mkdtempSync(join(tmpdir(), "leakdown-runs-"));
 after(() => rmSync(scratch, { recursive: true, force: true }));
 
 describe("siteSlug", () => {

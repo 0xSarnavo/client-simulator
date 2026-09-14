@@ -29,7 +29,7 @@ function writeDenyConfig(role: BrainRole): string {
   // must not be able to pre-plant this file)
   let path = configPaths[role];
   if (!path) {
-    const dir = mkdtempSync(join(tmpdir(), "clientsim-oc-"));
+    const dir = mkdtempSync(join(tmpdir(), "leakdown-oc-"));
     path = join(dir, `${role}-permissions.json`);
     writeFileSync(path, JSON.stringify(DENY_CONFIG[role] ?? DENY_CONFIG.persona));
     configPaths[role] = path;

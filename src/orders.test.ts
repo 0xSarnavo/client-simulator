@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { mimeWithAttachment, renderOrders } from "./orders.js";
 
-const scratch = mkdtempSync(join(tmpdir(), "clientsim-orders-"));
+const scratch = mkdtempSync(join(tmpdir(), "leakdown-orders-"));
 after(() => rmSync(scratch, { recursive: true, force: true }));
 
 describe("mimeWithAttachment", () => {
@@ -14,7 +14,7 @@ describe("mimeWithAttachment", () => {
     writeFileSync(pdf, Buffer.from("%PDF-1.4 fake"));
     const mime = mimeWithAttachment({ from: "a@x.com", to: "b@y.com", subject: "Report", text: "hello", pdfPath: pdf });
     assert.match(mime, /^From: a@x\.com\r\nTo: b@y\.com\r\nSubject: Report\r\n/);
-    assert.match(mime, /Content-Type: multipart\/mixed; boundary="cs-/);
+    assert.match(mime, /Content-Type: multipart\/mixed; boundary="ld-/);
     assert.match(mime, /filename="x-report\.pdf"/);
     const b64 = mime.split("Content-Transfer-Encoding: base64\r\n\r\n")[1].split("\r\n--")[0].replace(/\r\n/g, "");
     assert.equal(Buffer.from(b64, "base64").toString(), "%PDF-1.4 fake");

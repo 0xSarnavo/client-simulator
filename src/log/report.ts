@@ -20,7 +20,7 @@ function durationSuffix(events: StepEvent[]): string {
 
 /** Every report carries who made it and how to read it — the same line, everywhere. */
 export function watermark(site: string): string {
-  return `\n---\n*client-simulator · ${site} · ${new Date().toISOString().slice(0, 10)} · simulated prospects: risk signals, not measured traffic*\n`;
+  return `\n---\n*leakdown · ${site} · ${new Date().toISOString().slice(0, 10)} · simulated prospects: risk signals, not measured traffic*\n`;
 }
 
 export function fmtDuration(seconds: number): string {
@@ -43,7 +43,7 @@ export function generateReport(opts: {
   const lines: string[] = [];
 
   const verdict = exitVerdict(exit);
-  lines.push(`# Client-Sim Report`);
+  lines.push(`# Leakdown Report`);
   lines.push("");
   lines.push(`- **Site:** ${url}`);
   lines.push(`- **Persona:** ${persona.name} (${persona.temperature})`);

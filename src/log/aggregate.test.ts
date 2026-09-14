@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { generateAggregate, generateDetail, loadSessions } from "./aggregate.js";
 
-const scratch = mkdtempSync(join(tmpdir(), "clientsim-agg-"));
+const scratch = mkdtempSync(join(tmpdir(), "leakdown-agg-"));
 after(() => rmSync(scratch, { recursive: true, force: true }));
 
 let n = 0;

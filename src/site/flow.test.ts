@@ -10,7 +10,7 @@ let tmp: string;
 
 describe("flow round-trip", () => {
   beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), "clientsim-flow-"));
+    tmp = mkdtempSync(join(tmpdir(), "leakdown-flow-"));
     process.chdir(tmp);
   });
   afterEach(() => {

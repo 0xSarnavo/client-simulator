@@ -206,7 +206,7 @@ ${list(b.tripwires, "nothing obvious")}
 
 ${b.arrival}
 
-<!-- Written by client-simulator from the live page. Regenerate with --plan. -->
+<!-- Written by leakdown from the live page. Regenerate with --plan. -->
 `;
 }
 

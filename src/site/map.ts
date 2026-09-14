@@ -189,7 +189,7 @@ export function renderMap(map: SiteMap): string {
       `| ${p.url} | ${p.kind} | ${p.depth < 0 ? "sitemap" : p.depth} | ${p.title.replace(/\|/g, "\\|").slice(0, 80)} |`,
     );
   }
-  lines.push("", `<!-- Written by client-simulator. Regenerate with --plan. -->`, "");
+  lines.push("", `<!-- Written by leakdown. Regenerate with --plan. -->`, "");
   return lines.join("\n");
 }
 

@@ -50,7 +50,7 @@ export async function scrapeSiteContext(url: string): Promise<string> {
   const driver = new BrowserDriver();
   // a fixed /tmp path was both predictable (another local user can pre-plant it)
   // and never cleaned up — mkdtemp gives a private 0700 dir we can delete after
-  const tmp = mkdtempSync(join(tmpdir(), "clientsim-scrape-"));
+  const tmp = mkdtempSync(join(tmpdir(), "leakdown-scrape-"));
   try {
     await driver.launch({ headless: true, shotsDir: tmp });
     await driver.goto(url);

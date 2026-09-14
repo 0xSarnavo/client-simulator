@@ -6,7 +6,7 @@ import { after, before, describe, it } from "node:test";
 import { arrivalFor, briefPath, hasBrief, icpSeed, loadArrivalContext } from "./brief.js";
 
 // briefPath is relative to cwd, so the whole suite runs inside a scratch dir
-const scratch = mkdtempSync(join(tmpdir(), "clientsim-brief-"));
+const scratch = mkdtempSync(join(tmpdir(), "leakdown-brief-"));
 const cwd = process.cwd();
 before(() => process.chdir(scratch));
 after(() => {
@@ -40,7 +40,7 @@ ${URL}
 
 You searched for a way to turn web pages into clean markdown for a RAG pipeline.
 
-<!-- Written by client-simulator from the live page. Regenerate with --plan. -->
+<!-- Written by leakdown from the live page. Regenerate with --plan. -->
 `;
 
 function writeBrief(body = BRIEF) {
