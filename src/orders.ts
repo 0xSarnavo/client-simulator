@@ -1,6 +1,7 @@
 /**
  * Orders: run requests people leave on the website. The site only stores
- * them (a private S3 bucket behind website/server.mjs); nothing runs until
+ * them (a private S3 bucket behind the leakdown-website repo, separate,
+ * deploys to Vercel); nothing runs until
  * the operator picks one here, on their own machine and subscription. That
  * is deliberate — an unrun order costs nothing, so spam costs nothing.
  */

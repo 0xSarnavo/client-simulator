@@ -1,6 +1,6 @@
-# AGENTS.md — client-simulator
+# AGENTS.md — leakdown
 
-Instructions for AI coding agents (and humans) operating **client-simulator**: a CLI that sends synthetic client personas through any website's onboarding. Personas think out loud, complete or abandon the flow like real users, and produce drop-off reports.
+Instructions for AI coding agents (and humans) operating **leakdown**: a CLI that sends synthetic client personas through any website's onboarding. Personas think out loud, complete or abandon the flow like real users, and produce drop-off reports.
 
 This is the single source for the repo. Three parts:
 
@@ -18,7 +18,7 @@ it is there so you do not rebuild them.
 
 # Part 1 — Operating the tool
 
-## What client-simulator does
+## What leakdown does
 
 Simulated prospects visit a target URL in a real browser (Playwright). At each step an AI CLI — playing a persona — sees an accessibility snapshot and decides the next action: click, type, scroll, check email, pause, abandon. Everything is logged. Expert agents then review sessions and produce fix recommendations.
 
@@ -37,22 +37,24 @@ Requirements: Node 20+, and at least one AI CLI logged in via subscription (no A
 **Verify environment (runs automatically on first visit):**
 
 ```bash
-client-simulator --doctor          # deep check incl. live brain call + mailbox test
-client-simulator --doctor --force  # re-run even if recently verified
+leakdown --doctor          # deep check incl. live brain call + mailbox test
+leakdown --doctor --force  # re-run even if recently verified
 ```
 
-Results are cached in `.clientsimulator-state.json` (gitignored) for 7 days — checks don't re-run every time.
+Results are cached in `.leakdown-state.json` (gitignored) for 7 days — checks don't re-run every time.
 
 **Optional — email verification support (OTP/magic links):** create `.env` in the project root:
 
 ```
-CLIENTSIM_IMAP_HOST="imap.gmail.com"
-CLIENTSIM_IMAP_USER="you@gmail.com"
-CLIENTSIM_IMAP_PASS="xxxx xxxx xxxx xxxx"   # Gmail app password
-CLIENTSIM_MAIL_DOMAIN="yourdomain.com"      # domain with catch-all → your inbox
+LEAKDOWN_IMAP_HOST="imap.gmail.com"
+LEAKDOWN_IMAP_USER="you@gmail.com"
+LEAKDOWN_IMAP_PASS="xxxx xxxx xxxx xxxx"   # Gmail app password
+LEAKDOWN_MAIL_DOMAIN="yourdomain.com"      # domain with catch-all → your inbox
 ```
 
-Requires a domain whose catch-all forwards to the IMAP inbox. Without it, personas treat "check your email" walls as drop-off points (still valid data). Test with `client-simulator --mailtest`.
+Legacy `CLIENTSIM_*` vars still work for one minor with a deprecation warning — use `LEAKDOWN_*`.
+
+Requires a domain whose catch-all forwards to the IMAP inbox. Without it, personas treat "check your email" walls as drop-off points (still valid data). Test with `leakdown --mailtest`.
 
 Every run probes the mailbox first (one self-sent message, once a day, up to 5 minutes) and records the result on each session's `meta.json`. A failed probe does not stop the run; it puts an "email verdicts unverified" warning at the top of `AGGREGATE.md`. If two or more prospects in one run give up over email, the probe runs again afterwards and a failure writes `runs/<site>/MAIL-WARNING.md`. Gmail files self-sent mail under All Mail, never INBOX, so the poller scans the `\All` folder where one exists.
 
@@ -64,9 +66,9 @@ which model, and how much reasoning effort. They are resolved once and reused fo
 the rest of the run. Pass them as flags or let it ask.
 
 ```bash
-client-simulator <url>                                    # menus for all three
-client-simulator <url> --brain claude                     # menus for model + effort only
-client-simulator <url> --brain claude --model opus --effort high   # no menus
+leakdown <url>                                    # menus for all three
+leakdown <url> --brain claude                     # menus for model + effort only
+leakdown <url> --brain claude --model opus --effort high   # no menus
 ```
 
 The menus are arrow-key driven and the lists are probed live from the CLI you
@@ -86,7 +88,7 @@ models, **custom…** to type any id.
 in scripts and CI so runs are reproducible; a session records the brain, model,
 and effort it used in `meta.json`.
 
-**Zero-argument wizard:** running bare `client-simulator` opens a guided flow
+**Zero-argument wizard:** running bare `leakdown` opens a guided flow
 (what to do → url → how far to go → brain → model → effort → who visits).
 `--help` still prints the flag reference. Ctrl-C out of any menu exits cleanly
 with status 130.
@@ -94,9 +96,9 @@ with status 130.
 ## One command
 
 ```bash
-client-simulator <url>                          # the lot
-client-simulator site-a.dev --yes            # the lot, asking nothing
-client-simulator site-a.dev --stop personas  # just read it and build prospects
+leakdown <url>                          # the lot
+leakdown site-a.dev --yes            # the lot, asking nothing
+leakdown site-a.dev --stop personas  # just read it and build prospects
 ```
 
 Point it at a site and five stages run in order:
@@ -126,8 +128,8 @@ screen, plus a headings outline of what lies below. On a 21-screen page that is
 ### The ladder
 
 ```bash
-client-simulator <url> --ladder --yes --headless
-client-simulator <url> --ladder --wide "haiku:5,opencode/muse-spark-1.3-contributor-free:5"
+leakdown <url> --ladder --yes --headless
+leakdown <url> --ladder --wide "haiku:5,opencode/muse-spark-1.3-contributor-free:5"
 ```
 
 The fleet the model eval chose, as one command: the site's personas are
@@ -146,7 +148,7 @@ single-source finding earns a second run before it counts.
 ### Goal tests
 
 ```bash
-client-simulator <url> --goal "log in and get an API key" --steps 15 --yes --headless
+leakdown <url> --goal "log in and get an API key" --steps 15 --yes --headless
 ```
 
 `--goal` swaps every queued persona's goal for the asserted one and turns the
@@ -158,23 +160,23 @@ unchanged: same personas, same reports, same artifacts.
 ### On its own
 
 ```bash
-client-simulator --report [dirs...]     # aggregate past sessions
-client-simulator --fix <dirs...>        # expert panel over past sessions
-client-simulator --doctor               # verify the environment
-client-simulator --list-personas        # every persona, built-in and custom
-client-simulator --new-persona "Name"   # build one by answering questions
-client-simulator --mailtest             # mailbox lifecycle test
-client-simulator <url> --persona marcus,marcus,marcus   # the same persona three times (test-retest); --random <n> draws random ones
-client-simulator --history [site]       # one line per run: date, the one number, who sat in which seat
-client-simulator --fix site-b.ai   # a site name means its newest run; site/date/time names one run
-client-simulator --orders               # run requests left on the website
-client-simulator --order <id>           # run one here, email the PDF; --reject "why" declines it
+leakdown --report [dirs...]     # aggregate past sessions
+leakdown --fix <dirs...>        # expert panel over past sessions
+leakdown --doctor               # verify the environment
+leakdown --list-personas        # every persona, built-in and custom
+leakdown --new-persona "Name"   # build one by answering questions
+leakdown --mailtest             # mailbox lifecycle test
+leakdown <url> --persona marcus,marcus,marcus   # the same persona three times (test-retest); --random <n> draws random ones
+leakdown --history [site]       # one line per run: date, the one number, who sat in which seat
+leakdown --fix site-b.ai   # a site name means its newest run; site/date/time names one run
+leakdown --orders               # run requests left on the website
+leakdown --order <id>           # run one here, email the PDF; --reject "why" declines it
 ```
 
 Orders are the website's request form. The site only stores them (a private
-bucket behind `website/server.mjs`); nothing runs until you pick one with
+bucket behind the leakdown-website repo, separate, deploys to Vercel); nothing runs until you pick one with
 `--order`, on this machine and this subscription, so a spammed form costs
-nothing. Needs `CLIENTSIM_ORDERS_URL` (the site) and `CLIENTSIM_ORDERS_TOKEN`
+nothing. Needs `LEAKDOWN_ORDERS_URL` (the site) and `LEAKDOWN_ORDERS_TOKEN`
 (the site's `ORDERS_TOKEN`) in `.env`, and mail configured — the report goes
 out as a PDF attachment.
 
@@ -254,9 +256,9 @@ runs rather than in the flat global directory.
 ### Custom personas (YAML)
 
 ```bash
-client-simulator --list-personas               # list all (built-in, custom, per-site)
-client-simulator --new-persona "My Persona"    # asks: scope, temperature, goal, traits
-client-simulator <url> --stop personas         # AI-build a set for that site
+leakdown --list-personas               # list all (built-in, custom, per-site)
+leakdown --new-persona "My Persona"    # asks: scope, temperature, goal, traits
+leakdown <url> --stop personas         # AI-build a set for that site
 ```
 
 #### Calibrating to real visitors (optional)
@@ -281,8 +283,8 @@ local notes) — this file is how that test gets run.
 #### Persona generator (AI-built persona sets)
 
 ```bash
-client-simulator <url> --stop personas        # read the site, build a set, stop
-client-simulator <url> --stop personas --plan # rebuild the set for a known site
+leakdown <url> --stop personas        # read the site, build a set, stop
+leakdown <url> --stop personas --plan # rebuild the set for a known site
 ```
 
 How it works:
@@ -323,7 +325,7 @@ traits:                      # free-text personality lines — these steer the L
   - "leaves immediately if a credit card is required for a trial"
 ```
 
-Traits are the personality lever — write them like a character brief, first-person reactions the LLM should mimic. Invalid files are listed with reasons by `client-simulator --list-personas` and skipped (never crash runs).
+Traits are the personality lever — write them like a character brief, first-person reactions the LLM should mimic. Invalid files are listed with reasons by `leakdown --list-personas` and skipped (never crash runs).
 
 ## Safety
 
@@ -430,7 +432,7 @@ runs/
       verify/<model>/            # the verifier's FIXES.md per chosen session (no sessions of its own)
         <HH-MM-SS>-<persona>/FIXES.md
       deep/<model>/              # the writer's own session, same files as a wide one
-.clientsimulator-state.json  # doctor verification cache (gitignored)
+.leakdown-state.json  # doctor verification cache (gitignored)
 .env                   # mail config (gitignored)
 ```
 
@@ -455,8 +457,8 @@ none).
 ## Useful commands
 
 ```bash
-client-simulator --doctor    # verify environment
-client-simulator --mailtest  # mailbox create/receive/extract/destroy lifecycle test
+leakdown --doctor    # verify environment
+leakdown --mailtest  # mailbox create/receive/extract/destroy lifecycle test
 npm run build                # compile — source is TypeScript in src/
 ```
 
@@ -465,7 +467,7 @@ Changing the code rather than running it? Build, typecheck and test commands are
 
 ## Tips for agents operating this tool
 
-1. Always run `client-simulator --doctor` first on a new machine.
+1. Always run `leakdown --doctor` first on a new machine.
 2. Pass `--brain`, `--model`, and `--effort` explicitly — an agent has no TTY, so
    omitting them silently accepts defaults rather than prompting.
 3. Prefer `--headless` in CI/automation; headed mode is better for watching behavior live.
@@ -664,7 +666,7 @@ well under a second and a green run is not end-to-end proof. For anything touchi
 the loop, the driver or a prompt, do a real run:
 
 ```bash
-client-simulator <url> --persona cold --brain claude --headless --stop visit
+leakdown <url> --persona cold --brain claude --headless --stop visit
 ```
 
 ---
