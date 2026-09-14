@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { buildPrompt, buildRepairPrompt, buildVerificationPrompt } from "./prompt.js";
+import { buildPrompt, buildRepairPrompt, buildSystemPrompt, buildUserPrompt, buildVerificationPrompt } from "./prompt.js";
 import { PERSONAS } from "../persona/presets.js";
 import type { BrainContext, StepEvent } from "../types.js";
 
@@ -19,6 +19,25 @@ const ctx = (over: Partial<BrainContext> = {}): BrainContext => ({
   stepNumber: 1,
   history: [],
   ...over,
+});
+
+describe("buildSystemPrompt / buildUserPrompt", () => {
+  it("keeps everything per-step out of the system half, and the rules out of the user half", () => {
+    const history = Array.from({ length: 8 }, (_, i) => step(i + 1, `thought ${i + 1}`));
+    const c = ctx({ history, stepNumber: 9, emailAddress: "cold.a1@x.com", failedHint: "click e5 — timeout" });
+    const sys = buildSystemPrompt(c);
+    const user = buildUserPrompt(c);
+    for (const perStep of [/https:\/\/site\.com/, /Step number/, /ref=e1\]/, /LAST ACTION FAILED/, /thought 8/])
+      assert.ok(!perStep.test(sys), `system half changes per step: ${perStep}`);
+    for (const fixed of [/Skeptical Sam/, /HARD SAFETY RULES/, /cold\.a1@x\.com/, /"abandon"/])
+      assert.ok(!fixed.test(user), `user half repeats the static block: ${fixed}`);
+    const joined = buildPrompt(c);
+    assert.ok(joined.startsWith(buildSystemPrompt(c, false)) && joined.includes(user), "joined prompt is not the two halves");
+    assert.ok(joined.trimEnd().endsWith("question = the question you wanted answered"), "joined prompt must end with the schema, as it always did");
+    assert.equal(joined.split("Choose ONE action:").length, 2, "schema appears more than once");
+    // claude -p treats a leading "-" as an option; the whole sweep died at step 1 once
+    assert.ok(!user.startsWith("-") && !sys.startsWith("-"), "a prompt half starts with '-'");
+  });
 });
 
 describe("buildPrompt", () => {

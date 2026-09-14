@@ -96,10 +96,15 @@ function shortUrl(url: string): string {
   }
 }
 
-export function buildPrompt(ctx: BrainContext): string {
+/**
+ * Two halves. The system half never changes within a session — who the persona
+ * is, how to behave, the rules, the reply schema — so a CLI that takes a system
+ * prompt can keep it in the cached prefix and pay per step only for the user
+ * half: where we are, what happened, what is on screen. Brains without a
+ * system-prompt flag get the two joined, which is what every brain got before.
+ */
+export function buildSystemPrompt(ctx: BrainContext, withSchema = true): string {
   const p = ctx.persona;
-  const historyBlock = renderHistory(ctx.history);
-
   return `You are role-playing as a REAL PERSON visiting a website. You are not an AI assistant. You are ${p.name}, a ${p.temperature === "cold" ? "skeptical first-time visitor who has never heard of this product" : p.temperature} prospect.
 
 WHO YOU ARE:
@@ -121,31 +126,42 @@ with — the page either meets it or it does not, and noticing the gap is the po
 }
 HOW TO BEHAVE:
 - Think and react like this person would, including doubts, laziness, and impatience.
-- You CANNOT see raw HTML. Below is an accessibility snapshot of the page. Element refs like [ref=e12] are how you point at things.
+- You CANNOT see raw HTML. Each step shows you an accessibility snapshot of the page. Element refs like [ref=e12] are how you point at things.
 ${
   ctx.readsFiles
-    ? `- If you want to see the page visually, you may read the screenshot file at: ${ctx.screenshotPath}`
-    : "- You cannot read files or images — judge everything from the snapshot below. Never try to open files."
+    ? "- If you want to see the page visually, you may read the screenshot file named in each step."
+    : "- You cannot read files or images — judge everything from the snapshot. Never try to open files."
 }
 - Do NOT invent elements that are not in the snapshot. Only interact with refs that exist.
 - If a form field is required for something you do not care about, that annoys you.
 - Wandering and exploring is normal human behavior — but your goal above is what you came for.
 - If nothing on the page serves your goal or you lose interest, ABANDON. Walking away is a valid, realistic choice.
 - Your confusion tolerance: once your confusion sits at ${p.max_confusion_before_bail}/10 or higher, you are close to walking out — act accordingly (ask questions by exploring, or abandon in character).
-- Current URL: ${ctx.url}
-- Step number: ${ctx.stepNumber}
 ${ctx.emailAddress ? `\nYOUR EMAIL ADDRESS (use this in signup forms): ${ctx.emailAddress}\nWhen a site says it sent you a code or link, use check_email to open your inbox and wait for it.\nNEVER invent an email address. Every email field gets YOUR EMAIL ADDRESS above, copied exactly. No exceptions — not a work email, not a company email, not a made-up one.` : ""}
 
 HARD SAFETY RULES (non-negotiable — the payment wall and email-address override are mechanically enforced by the harness; the rest are absolute rules you must never break):
 ${SAFETY_RULES}
-If the only path forward violates these rules, ABANDON and say so in your reason.
-${ctx.emailResult ? `\n📬 YOUR INBOX (result of last check):\n${ctx.emailResult}` : ""}
+If the only path forward violates these rules, ABANDON and say so in your reason.${withSchema ? `\n\n${SCHEMA_INSTRUCTIONS}` : ""}`;
+}
+
+export function buildUserPrompt(ctx: BrainContext): string {
+  const historyBlock = renderHistory(ctx.history);
+  // never start with "-": `claude -p "<prompt>"` would read it as an option
+  return `WHERE YOU ARE NOW:
+- Current URL: ${ctx.url}
+- Step number: ${ctx.stepNumber}
+${ctx.readsFiles ? `- Screenshot of this step: ${ctx.screenshotPath}\n` : ""}${ctx.emailResult ? `\n📬 YOUR INBOX (result of last check):\n${ctx.emailResult}` : ""}
 ${ctx.failedHint ? `\n⚠️ YOUR LAST ACTION FAILED: ${ctx.failedHint}\nThat element may be broken or hidden. Try a DIFFERENT approach — another element, scrolling, going back — or abandon if blocked.` : ""}
 ${historyBlock ? `\n${historyBlock}` : "\nYou have just arrived at this website. This is your first impression."}
 
 ${renderPage(ctx)}
 
-${SCHEMA_INSTRUCTIONS}`;
+Reply with ONLY the single JSON object described in your instructions — one action, no prose.`;
+}
+
+/** The whole prompt in one string, for brains with no system-prompt flag. Schema last, where it always was. */
+export function buildPrompt(ctx: BrainContext): string {
+  return `${buildSystemPrompt(ctx, false)}\n\n${buildUserPrompt(ctx)}\n\n${SCHEMA_INSTRUCTIONS}`;
 }
 
 /**

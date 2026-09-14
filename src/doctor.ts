@@ -11,9 +11,17 @@ interface DoctorResult {
   live: boolean;
 }
 
+export interface MailProbe {
+  at: string;
+  ok: boolean;
+  /** seconds until the probe landed; null when it never did */
+  latencySeconds: number | null;
+}
+
 interface StateFile {
   lastCheck: string;
   results: DoctorResult[];
+  mailProbe?: MailProbe;
 }
 
 function loadState(): StateFile | null {
@@ -41,8 +49,22 @@ function stateIsFresh(state: StateFile): boolean {
 function saveState(results: DoctorResult[]) {
   writeFileSync(
     STATE_FILE,
-    JSON.stringify({ lastCheck: new Date().toISOString(), results }, null, 2),
+    JSON.stringify({ ...loadState(), lastCheck: new Date().toISOString(), results }, null, 2),
   );
+}
+
+const MAIL_PROBE_MAX_AGE_MS = 24 * 3600_000;
+
+/** The last mail probe, if it is recent enough to still mean something. */
+export function recentMailProbe(): MailProbe | null {
+  const p = loadState()?.mailProbe;
+  if (!p || typeof p.at !== "string") return null;
+  return Date.now() - new Date(p.at).getTime() < MAIL_PROBE_MAX_AGE_MS ? p : null;
+}
+
+export function saveMailProbe(probe: MailProbe): void {
+  const state = loadState() ?? { lastCheck: new Date(0).toISOString(), results: [] };
+  writeFileSync(STATE_FILE, JSON.stringify({ ...state, mailProbe: probe }, null, 2));
 }
 
 async function checkNode(): Promise<DoctorResult> {
@@ -160,13 +182,11 @@ function printQuickStart() {
   ${"─".repeat(58)}
   Ready. Common commands:
 
-  client-simulator                                  guided wizard, no flags needed
-  client-simulator visit <url>                      interactive: pick persona counts
-  client-simulator visit <url> --persona cold       single persona
-  client-simulator visit <url> --persona cold,warm,hot --brain opencode
-  client-simulator report                           per-site funnel reports
-  client-simulator fix runs/<site>/<date>/<run>     expert panel -> FIXES.md
-  client-simulator all <url>                        visit -> report -> fix
+  client-simulator <url> --ladder --yes --headless   the measured fleet: wide, verify, dig, report
+  client-simulator <url>                              the plain pipeline, menus for every choice
+  client-simulator <url> --goal "sign up and get an API key" --steps 15   pass/fail, exit 0/1
+  client-simulator --report | --fix <dirs> | --pdf    rerun a stage on past sessions
+  client-simulator --orders / --order <id>            requests left on the website
 
   Sessions land in runs/<site>/<date>/<time>-<persona>/
   Brains: --brain claude (default) | --brain opencode | --brain codex

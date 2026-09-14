@@ -65,6 +65,15 @@ export const StepEventSchema = z.object({
   decision: DecisionSchema,
   note: z.string().optional(),
   scrollY: z.number().optional(),
+  /** mechanical checks, recorded the first time a session lands on a URL */
+  audit: z
+    .object({
+      unnamed: z.array(z.string()),
+      small: z.array(z.string()),
+      overflowX: z.boolean(),
+      viewportMeta: z.boolean(),
+    })
+    .optional(),
 });
 
 export const ExitReasonSchema = z.discriminatedUnion("kind", [
@@ -86,6 +95,8 @@ export type StepEvent = {
   decision: Decision;
   /** e.g. why a "complete" claim was rejected by verification */
   note?: string;
+  /** mechanical checks from browser/audit.ts, recorded the first time a session lands on a URL */
+  audit?: { unnamed: string[]; small: string[]; overflowX: boolean; viewportMeta: boolean };
   /**
    * Scroll offset when this decision was made. Lets stuckPattern tell a persona
    * working its way down a long page from one wedged at the bottom still

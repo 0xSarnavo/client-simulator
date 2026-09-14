@@ -26,7 +26,7 @@ const PersonaFileSchema = z.object({
   tech_comfort: z.enum(["low", "medium", "high"]).default("medium"),
   patience_steps: z.number().int().min(1).max(50).default(12),
   max_confusion_before_bail: z.number().min(1).max(10).default(8),
-  otp_patience_seconds: z.number().int().min(30).max(600).default(180),
+  otp_patience_seconds: z.number().int().min(30).max(600).default(300),
   traits: z.array(z.string().min(1)).default([]),
 });
 
@@ -133,7 +133,7 @@ goal: >-
 tech_comfort: medium         # low | medium | high
 patience_steps: 12           # max steps before giving up (1-50)
 max_confusion_before_bail: 8 # confusion level that pushes toward abandoning (1-10)
-otp_patience_seconds: 180    # how long to wait for verification emails (30-600)
+otp_patience_seconds: 300    # how long to wait for verification emails (30-600)
 
 traits:
   - "compares alternatives mentally"

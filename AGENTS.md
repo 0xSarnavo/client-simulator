@@ -54,6 +54,8 @@ CLIENTSIM_MAIL_DOMAIN="yourdomain.com"      # domain with catch-all → your inb
 
 Requires a domain whose catch-all forwards to the IMAP inbox. Without it, personas treat "check your email" walls as drop-off points (still valid data). Test with `client-simulator --mailtest`.
 
+Every run probes the mailbox first (one self-sent message, once a day, up to 5 minutes) and records the result on each session's `meta.json`. A failed probe does not stop the run; it puts an "email verdicts unverified" warning at the top of `AGGREGATE.md`. If two or more prospects in one run give up over email, the probe runs again afterwards and a failure writes `runs/<site>/MAIL-WARNING.md`. Gmail files self-sent mail under All Mail, never INBOX, so the poller scans the `\All` folder where one exists.
+
 ## Choosing the AI (brain, model, effort)
 
 Every stage that calls an AI — the site read, persona generation, the visits, the
@@ -102,9 +104,10 @@ Point it at a site and five stages run in order:
 | Stage | Does | Writes |
 |---|---|---|
 | `site` | Scrapes the landing page: what it sells, to whom, its CTA, signup path, visible pricing, walls, what a first-timer trips on | `runs/<site>/SITE.md` |
+| `map` | Crawls two clicks from the landing page plus `sitemap.xml`, no brain: every internal page tagged by kind, and every booking or payment surface, on-site or off. The aggregate later lists pages no prospect found | `runs/<site>/MAP.md`, `map.json` |
 | `personas` | Builds a prospect set fitted to that product, spread across core / adjacent / edge | `runs/<site>/personas/` |
 | `visit` | One session per persona — one at a time by default (`--parallel` runs a multi-persona queue all at once; omit both flags and it asks) — live thought stream (lines prefixed by persona id), ending COMPLETED / ABANDONED / GUARDRAIL | `session.jsonl`, `report.md`, `video.webm` |
-| `report` | Aggregates the funnel across the site's sessions | `runs/<site>/AGGREGATE.md` |
+| `report` | The short report an owner reads — one number, the walls with quotes and "check it yourself" steps, a developer section — plus every table behind it | `runs/<site>/AGGREGATE.md`, `DETAIL.md` |
 | `fix` | Expert panel over each session | `FIXES.md` per session |
 
 `--stop <stage>` ends after that one. `site` is written once per site and
@@ -119,6 +122,26 @@ was reorganised — see [DECISIONS.md](DECISIONS.md), 2026-08-31.
 **A persona only ever sees one viewport.** The snapshot is cut to what is on
 screen, plus a headings outline of what lies below. On a 21-screen page that is
 40 elements instead of 776. Scrolling is free — it does not spend patience.
+
+### The ladder
+
+```bash
+client-simulator <url> --ladder --yes --headless
+client-simulator <url> --ladder --wide "haiku:5,opencode/muse-spark-1.3-contributor-free:5"
+```
+
+The fleet the model eval chose, as one command: the site's personas are
+visited half by haiku and half by muse-spark (free, when opencode is
+installed; `--wide` changes the split, `--wide haiku` is haiku only), the
+replication filter picks the sessions that cite what other sessions also
+cite, sonnet runs the expert panel on those three, opus re-walks the persona
+behind the top session and gets its own panel, and the report is regenerated
+over everything. Cheaper models produce votes; only sonnet verifies and only
+opus writes what a founder reads. Wide sessions from the same day are reused,
+so a rerun after a crash or a usage limit does not pay for the sweep twice.
+About $12 and an hour per site on the measured runs. Retest measured haiku at 3.8/4 agreement on a hot persona and
+2.5/4 on an edge one, so one wide run per persona is the default and a
+single-source finding earns a second run before it counts.
 
 ### Goal tests
 
@@ -141,7 +164,17 @@ client-simulator --doctor               # verify the environment
 client-simulator --list-personas        # every persona, built-in and custom
 client-simulator --new-persona "Name"   # build one by answering questions
 client-simulator --mailtest             # mailbox lifecycle test
+client-simulator <url> --persona marcus,marcus,marcus   # the same persona three times (test-retest); --runs draws random ones
+client-simulator --orders               # run requests left on the website
+client-simulator --order <id>           # run one here, email the PDF; --reject "why" declines it
 ```
+
+Orders are the website's request form. The site only stores them (a private
+bucket behind `website/server.mjs`); nothing runs until you pick one with
+`--order`, on this machine and this subscription, so a spammed form costs
+nothing. Needs `CLIENTSIM_ORDERS_URL` (the site) and `CLIENTSIM_ORDERS_TOKEN`
+(the site's `ORDERS_TOKEN`) in `.env`, and mail configured — the report goes
+out as a PDF attachment.
 
 Sessions are grouped by the URL recorded in each `meta.json`, not by where they
 sit on disk, so a session moved between folders still lands in the right funnel.
@@ -224,6 +257,25 @@ client-simulator --new-persona "My Persona"    # asks: scope, temperature, goal,
 client-simulator <url> --stop personas         # AI-build a set for that site
 ```
 
+#### Calibrating to real visitors (optional)
+
+Drop `runs/<site>/analytics.json` beside the brief and the generator weights
+the set toward what the owner's dashboard says. Five lines is enough:
+
+```json
+{
+  "exitPages": [{ "path": "/pricing", "share": 0.38 }, { "path": "/", "share": 0.31 }],
+  "devices": { "mobile": 0.55, "desktop": 0.45 },
+  "entry": ["google organic", "product hunt"],
+  "note": "Most signups come through the docs, not the homepage."
+}
+```
+
+Shares are fractions of 1. No file means fully synthetic, which is the
+default; `--plan` rebuilds the set after you add one. Whether calibrated sets
+find more true problems than synthetic ones is an open question (Q6 in the
+local notes) — this file is how that test gets run.
+
 #### Persona generator (AI-built persona sets)
 
 ```bash
@@ -263,7 +315,7 @@ goal: >-
 tech_comfort: medium         # low | medium | high (default medium)
 patience_steps: 12           # max steps (default 12, max 50)
 max_confusion_before_bail: 8 # confusion that pushes toward abandoning (default 8)
-otp_patience_seconds: 180    # email verification wait (default 180)
+otp_patience_seconds: 300    # email verification wait (default 300 — real mail has taken 5 min)
 traits:                      # free-text personality lines — these steer the LLM
   - "checks price before features"
   - "leaves immediately if a credit card is required for a trial"
@@ -353,8 +405,10 @@ Judging the action instead of the address fixes both failure modes.
 runs/
   <site>/                        # hostname, www. stripped (e.g. example.com)
     SITE.md                      # what the page sells, its walls, its tripwires
+    MAP.md, map.json             # crawler's view: pages by kind, booking/payment surfaces
     personas/                    # the prospects generated for this product
-    AGGREGATE.md                 # funnel across this site's sessions (after stage 2)
+    AGGREGATE.md                 # the short report: one number, the walls, developer refs (after report)
+    DETAIL.md                    # every session, every table, every quote — the appendix
     .aggregate-manifest.json     # stage-2 up-to-date check
     <YYYY-MM-DD>/
       <HH-MM-SS>-<persona>/
@@ -458,12 +512,14 @@ loop `continue`s with a note, because personas are wrong about being done.
 | `src/types.ts` | `Persona`; the `Decision` / `StepEvent` / `Verdict` zod schemas; the `Brain` and `BrainContext` interfaces; `SAFETY_RULES` prompt text | Changing the decision contract |
 | `src/safety.ts` | `blockedAction()` — label extraction, Luhn, payment and SSO matching | Adding or relaxing a guard |
 | `src/runs.ts` | The `runs/` layout: `siteSlug()`, `sessionPath()`, `findSessionDirs()` | Changing where sessions land |
-| `src/doctor.ts` | Environment verification and its 7-day state cache | Adding a preflight check |
+| `src/doctor.ts` | Environment verification and its 7-day state cache; the daily mail-probe record | Adding a preflight check |
+| `src/orders.ts` | Website orders: list, fetch, set status; `mimeWithAttachment()` for the emailed PDF | Changing how an order is fulfilled |
 | `src/browser/driver.ts` | Playwright wrapper: `snapshot()` and its per-ref visibility measurement, actions, screenshots, video, popup following, `needsKeystrokes()`, `chooseRecording()` | Anything the browser does |
 | `src/browser/cursor.ts` | Injected pointer and click ripple for recordings | Changing what recordings show |
+| `src/browser/audit.ts` | Mechanical page checks per snapshot: controls with no accessible name, tap targets under 24px, sideways overflow, viewport meta. Recorded once per URL on the step event; the report unions them per page | Adding a measurable check |
 | `src/browser/prune.ts` | `pruneSnapshot()` machine-noise removal, and `splitByViewport()` — what a person can see vs an outline of what is below | Changing what the persona perceives of a page |
 | `src/brain/index.ts` | `getBrain()` — name to adapter | Registering a brain |
-| `src/brain/prompt.ts` | `buildPrompt()`, `fenceSafe()`, repair and verification prompts, history tiering | Changing what a persona sees |
+| `src/brain/prompt.ts` | `buildSystemPrompt()` (static, cached by the CLI) and `buildUserPrompt()` (per step); `fenceSafe()`, repair and verification prompts, history tiering | Changing what a persona sees — keep per-step facts out of the system half |
 | `src/brain/catalog.ts` | `BRAIN_SPECS`, live model and effort probing | Making a new brain appear in the picker |
 | `src/brain/picker.ts` | Resolving brain/model/effort from flags or menus, and validating them | Adding a brain-related flag |
 | `src/brain/roles.ts` | Per-role tool restrictions | Changing what a persona or expert may do |
@@ -476,9 +532,13 @@ loop `continue`s with a note, because personas are wrong about being done.
 | `src/mail/imap.ts` | `ImapProvider` — mailbox lifecycle, UID-addressed reads | Changing mailbox behaviour |
 | `src/mail/mime.ts` | Part picking, base64 and quoted-printable decoding, code and link extraction | Changing OTP extraction |
 | `src/site/brief.ts` | `runs/<site>/SITE.md`: writing it, and `arrivalFor()` / `icpSeed()` reading it back | Changing what a site read produces, or who sees it |
+| `src/site/map.ts` | `runs/<site>/map.json`: the crawl, `classify()`, and `unreached()` / `guardedSurfaces()` the aggregate reads | Changing what counts as a page, or a booking/payment surface |
+| `src/site/analytics.ts` | `runs/<site>/analytics.json`: the owner's real-visitor numbers, validated and rendered for persona generation | Changing what calibration reads |
 | `src/site/flow.ts` | `runs/<site>/FLOW.md`: drafting checkpoints from an intent, and `scoreFlow()` judging a finished session against them | Changing what a flow is or how sessions are scored |
 | `src/log/report.ts` | Per-session `report.md` and its timing | Changing a session report |
-| `src/log/aggregate.ts` | `loadSessions()` (zod-validated) and `generateAggregate()` | Changing the funnel |
+| `src/log/aggregate.ts` | `loadSessions()` (zod-validated), `generateAggregate()` (the short report) and `generateDetail()` (the appendix) | Changing what an owner or a developer reads |
+| `src/log/replication.ts` | Element refs cited across sessions: `collectSightings()`, `replicationTable()`; `--replication` | Changing what counts as replicated |
+| `src/log/pdf.ts` | `--pdf`: one send-ready PDF per site from AGGREGATE.md + one model's FIXES.md | Changing the packet |
 | `src/experts/index.ts` | The `EXPERTS` registry | Registering an expert |
 | `src/experts/{ux,copywriter,reviewers,discoverability,scores}.ts` | One expert each, plus its renderer | Changing panel output |
 | `src/ui/prompt.ts` | Zero-dependency `select` / `multiselect` / `text` over a raw-mode TTY | Adding a menu |

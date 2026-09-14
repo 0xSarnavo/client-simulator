@@ -17,14 +17,14 @@ import { generatePersonas } from "./persona/generate.js";
 import { stringify as stringifyYaml } from "yaml";
 import { runSession } from "./session.js";
 import { generateReport, journeySeconds } from "./log/report.js";
-import { generateAggregate, loadSessions } from "./log/aggregate.js";
+import { generateAggregate, generateDetail, loadSessions } from "./log/aggregate.js";
 import { RUNS_ROOT, dirLabel, findSessionDirs, sessionPath, siteSlug } from "./runs.js";
 import { EXPERTS } from "./experts/index.js";
 import type { Brain, ExitReason, Persona, StepEvent } from "./types.js";
 import type { MailProvider, Mailbox, MailMessage } from "./mail/types.js";
 import { ImapProvider, type ImapConfig } from "./mail/imap.js";
 import { extractCodes, extractLinks } from "./mail/types.js";
-import { runDoctor, doctorStateExists } from "./doctor.js";
+import { runDoctor, doctorStateExists, recentMailProbe, saveMailProbe, type MailProbe } from "./doctor.js";
 import { execa } from "execa";
 import { createInterface } from "node:readline/promises";
 import { resolveBrainChoice } from "./brain/picker.js";
@@ -38,12 +38,16 @@ import {
   text,
 } from "./ui/prompt.js";
 import { arrivalFor, blockedPath, blockedReason, ensureBrief, hasBrief, icpSeed, loadBrief } from "./site/brief.js";
+import { ensureMap, loadMap } from "./site/map.js";
+import { analyticsPath, loadAnalytics, renderAnalytics } from "./site/analytics.js";
 import { htmlToPdf, packetFor, packetHtml } from "./log/pdf.js";
+import { getOrder, listOrders, mimeWithAttachment, renderOrders, setOrderStatus } from "./orders.js";
+import { collectSightings, replicationTable, topSessions } from "./log/replication.js";
 import { draftFlow, loadFlow, scoreFlow, type Flow } from "./site/flow.js";
 
 const MAX_RUNS = 10;
 /** Stages, in the order they must run. `--stop <stage>` ends after one of these. */
-const STAGES = ["site", "personas", "visit", "report", "fix"] as const;
+const STAGES = ["site", "map", "personas", "visit", "report", "fix"] as const;
 type Stage = (typeof STAGES)[number];
 
 /** Interactive run planner: how many cold/warm/hot, then random order */
@@ -179,11 +183,16 @@ USAGE:
 
 STAGES, in order:
   site      read the page  -> runs/<site>/SITE.md
+  map       crawl 2 clicks -> runs/<site>/MAP.md (pages, booking/payment surfaces)
   personas  build prospects-> runs/<site>/personas/
   visit     send them      -> one session each
   report    the funnel     -> runs/<site>/AGGREGATE.md
   fix       expert panel   -> FIXES.md per session
 
+  --ladder [--wide <spec>]    the measured fleet: haiku visits every persona, the
+                              replication filter picks the sessions that agree, sonnet
+                              verifies those, opus re-walks the hardest persona and writes
+                              its report. --wide "haiku:5,opencode/<model>:5" splits the sweep.
   --stop <stage>              end after that one (default: run them all)
   --flow "<intent>"           the flow to test, e.g. "signup through to the
                               dashboard" — checkpoints are drafted for review,
@@ -220,6 +229,8 @@ ON ITS OWN:
   --replication [dirs...]     element refs cited across sessions: replicated vs single-source
                               add --by-model for a funnel per model too
   --fix <dirs...>             expert panel over past sessions -> FIXES.md
+  --orders [--all]            run requests left on the website (new ones, or all)
+  --order <id> [--reject "why"]  run one order here: pipeline, PDF, email — or decline it
   --pdf [sites...]            one shareable PDF per site (funnel + all fixes)
   --doctor                    verify the environment
   --list-personas             show every persona, built-in and custom
@@ -264,6 +275,8 @@ interface CommonArgs {
   steps?: number;
   /** never prompt — take the default for every question */
   yes?: boolean;
+  /** the ladder's wide sweep: "haiku" or "haiku:5,opencode/muse-spark-1.3-contributor-free:5" */
+  wide?: string;
   /** last stage to run; undefined means all three */
   stop?: Stage;
 }
@@ -293,6 +306,7 @@ function parseCommon(argv: string[]): CommonArgs {
       args.time = t;
     }
     else if (a === "--flow") args.flow = value(++i, a);
+    else if (a === "--wide") args.wide = value(++i, a);
     else if (a === "--goal") {
       const g = value(++i, a).trim();
       if (!g || g.length > 300) {
@@ -403,6 +417,29 @@ function briefPathLabel(url: string): string {
 }
 
 /**
+ * Crawl the site once so the aggregate can say which pages no prospect ever
+ * found. No brain involved; `--plan` re-crawls.
+ */
+async function prepareMap(url: string, common: CommonArgs): Promise<void> {
+  const fresh = !loadMap(url) || common.plan;
+  if (fresh) process.stdout.write("  \x1b[2mcrawling the site...\x1b[0m");
+  const map = await ensureMap(url, { force: common.plan });
+  if (fresh && process.stdout.isTTY) {
+    process.stdout.clearLine(0);
+    process.stdout.cursorTo(0);
+  }
+  if (!map) return;
+  const counts = new Map<string, number>();
+  for (const p of map.pages) counts.set(p.kind, (counts.get(p.kind) ?? 0) + 1);
+  console.log(
+    `  ${map.pages.length} pages: ${[...counts.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", ")}`,
+  );
+  for (const p of map.pages.filter((p) => p.kind === "booking" || p.kind === "payment"))
+    console.log(`  ${p.kind.padEnd(8)} ${p.url}${p.external ? " (off-site)" : ""} — commit refused by the guard`);
+  console.log(`\n  map: runs/${siteSlug(url)}/MAP.md\n`);
+}
+
+/**
  * Resolve the flow under test, with a review gate: the AI drafts checkpoints
  * from the brief, but the operator confirms them before anyone runs — a wrong
  * flow silently poisons persona generation and every score after it.
@@ -505,12 +542,26 @@ async function prepareSitePersonas(
     if (count === 0) return existing;
   }
 
+  // the owner's numbers, when they left any — five lines from a dashboard
+  let analyticsContext: string | undefined;
+  try {
+    const a = loadAnalytics(url);
+    if (a) {
+      analyticsContext = renderAnalytics(a);
+      console.log(`  analytics: calibrating to ${analyticsPath(url)} (${a.exitPages.length} exit pages)`);
+    }
+  } catch (e) {
+    console.error(`  ${(e as Error).message}`);
+    process.exit(1);
+  }
+
   try {
     const result = await generatePersonas({
       description: icpSeed(url) ?? undefined,
       count,
       brain,
       site: url,
+      analyticsContext,
       // the brief instead of a second scrape: it is both cheaper and better
       // context than a raw accessibility dump of the same page
       siteContext: loadBrief(url) ?? undefined,
@@ -605,6 +656,15 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
     const ok = await runDoctor(common.brain);
     if (!ok) process.exit(1);
   }
+  // the one check the weekly cache cannot vouch for: a playwright upgrade wants a
+  // new Chromium build, and the cache said "launches OK" while none was installed
+  try {
+    const { chromium } = await import("playwright");
+    await (await chromium.launch({ headless: true })).close();
+  } catch (e) {
+    console.error(`\n  Chromium will not start: ${(e as Error).message.split("\n")[0].slice(0, 120)}\n  Run: npx playwright install chromium\n`);
+    process.exit(1);
+  }
 
   // the brief comes first, and comes even when --persona was passed: it is the
   // ICP the persona set is built from, and the prior knowledge warm/hot arrive with
@@ -617,11 +677,17 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
     );
     return [];
   }
-  const flow = await prepareFlow(url, common, planningBrain);
-  if (!runsThrough("personas", common.stop)) {
+  if (!runsThrough("map", common.stop)) {
     console.log(`  Stopped after the site read. See ${briefPathLabel(url)}\n`);
     return [];
   }
+  stageBanner("map", common.stop);
+  await prepareMap(url, common);
+  if (!runsThrough("personas", common.stop)) {
+    console.log(`  Stopped after the map. See runs/${siteSlug(url)}/MAP.md\n`);
+    return [];
+  }
+  const flow = await prepareFlow(url, common, planningBrain);
 
   stageBanner("personas", common.stop);
   const generated = common.personas?.length
@@ -645,6 +711,9 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
 
   const dirs: string[] = [];
   const mailCfg = mailConfig();
+  // only a run that mints mailboxes needs the mailbox checked
+  const mailProbe = mailCfg ? await ensureMailProbe() : null;
+  let inboundSeen = false;
   if (!mailCfg) {
     // with a mailbox the harness forces every typed address to the ephemeral
     // one; without it, whatever the brain invents is what real signup forms get
@@ -689,14 +758,26 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
 
   let done = 0;
   let goalPasses = 0;
+  // a brain that fails before the first step is down (usage limit, auth, outage),
+  // and the next persona will not fare better — eight sessions once burned through
+  // a 30-minute limit in minutes, each filed as its own failure
+  let brainDown = false;
   const runOne = async ({ pid, sessionDir, n }: (typeof runs)[number]) => {
+    if (brainDown) {
+      console.log(`  ${tagged ? `[${pid}] ` : ""}skipped — the brain is not answering; rerun this persona later`);
+      rmSync(sessionDir, { recursive: true, force: true });
+      return;
+    }
     const base: Persona = registry.personas[pid];
     // A goal test asks "did it work", not "how did it feel" — same persona,
     // its goal swapped for the asserted one. verifyGoal already judges
     // persona.goal, so completion IS the pass condition.
+    // a 7-checkpoint flow (signup, email, workspace, survey…) is not doable in a hot
+    // persona's 10 steps; both hot personas ran out today while doing the right thing
+    const forFlow = flow ? Math.min(50, flow.checkpoints.length * 2 + 2) : 0;
     const persona: Persona = common.goal
       ? { ...base, goal: common.goal, patience_steps: common.steps ?? base.patience_steps }
-      : base;
+      : { ...base, patience_steps: Math.max(base.patience_steps, forFlow) };
     const tag = tagged ? pid : undefined;
 
     // one provider per agent — an IMAP connection is stateful, and concurrent
@@ -751,6 +832,12 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
         );
       }
 
+      if (mail?.lastInboundAt) inboundSeen = true;
+      if (exit.kind === "guardrail" && events.length === 0 && /Brain .* failed at step 1/.test(exit.detail)) {
+        brainDown = true;
+        const reply = exit.detail.match(/last reply: "(.{0,160})/)?.[1];
+        console.log(`\n  ⛔ the brain is not answering${reply ? ` — it said: "${reply}…"` : ""}.\n  A subscription usage limit looks exactly like this; wait for it to reset and rerun the same command.\n`);
+      }
       writeFileSync(
         `${sessionDir}/report.md`,
         generateReport({ persona, url, brain: describeRun(common).replace(/^brain: /, ""), events, exit, flow: flowScore ?? undefined }),
@@ -767,6 +854,7 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
             exit,
             viewport: common.mobile ? "mobile" : "desktop",
             flow: flowScore,
+            mailProbe,
             // claude reports tokens/cost; opencode does not, so the eval also
             // has steps + wall-clock as a model-agnostic efficiency proxy
             usage: (brain as { usage?: unknown }).usage ?? null,
@@ -803,6 +891,20 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
 
   if (parallel) await Promise.all(runs.map(runOne));
   else for (const r of runs) await runOne(r);
+
+  // two prospects blaming email in one run is the pattern that once produced
+  // seven false findings. A self-sent probe cannot settle it (Gmail shows us our
+  // own Sent copy), so the test is: did ANY session in this run receive mail
+  // from someone else? If none did, the mailbox is suspect, not the site.
+  const blamedEmail = emailAbandons(dirs);
+  if (mailCfg && blamedEmail.length >= 2 && !inboundSeen) {
+    const marker = `runs/${siteSlug(url)}/MAIL-WARNING.md`;
+    writeFileSync(
+      marker,
+      `# Email verdicts unverified\n\nIn this run ${blamedEmail.length} session(s) said the email never came, and no session received any mail from another sender. That can be the site, or our mailbox. Confirm the forwarder by sending a message to a persona address from a different account, then delete this file.\n\n${blamedEmail.map((d) => `- ${d}`).join("\n")}\n`,
+    );
+    console.log(`  ⚠ ${blamedEmail.length} prospects gave up over email and nothing inbound arrived — wrote ${marker}; the report will carry the warning`);
+  }
   if (common.goal) {
     const pass = goalPasses === personaIds.length;
     console.log(
@@ -894,7 +996,7 @@ async function report(dirs: string[] | undefined, force = false, byModel = false
       }
       for (const [model, mdirs] of groups) {
         const out = `runs/${site}/AGGREGATE-${modelSlug(model)}.md`;
-        writeFileSync(out, `<!-- model: ${model} -->\n${generateAggregate(mdirs)}`);
+        writeFileSync(out, `<!-- model: ${model} -->\n${generateDetail(mdirs)}`);
         console.log(`  ${site} / ${model}: ${mdirs.length} session(s) → ${resolve(out)}`);
       }
     }
@@ -928,6 +1030,7 @@ async function report(dirs: string[] | undefined, force = false, byModel = false
 
     mkdirSync(`runs/${site}`, { recursive: true });
     writeFileSync(out, generateAggregate(siteDirs));
+    writeFileSync(`runs/${site}/DETAIL.md`, generateDetail(siteDirs));
     writeFileSync(manifestPath, JSON.stringify({ dirs: siteDirs }, null, 2));
     console.log(`  ${site}: ${siteDirs.length} session(s) → ${resolve(out)}`);
     written++;
@@ -988,6 +1091,118 @@ async function pdf(sites: string[], model?: string) {
     }
   }
   console.log("");
+}
+
+/**
+ * The ladder — the fleet the 96-session eval and the site-g retest chose:
+ * a cheap wide sweep produces replication votes, the mechanical filter picks
+ * the sessions that agree, sonnet (the model that refuses to fabricate)
+ * verifies those, and opus (the only one that finds root causes) re-walks the
+ * hardest persona and writes the report a founder reads. Cheaper models
+ * never write anything a founder sees.
+ */
+const MUSE = "opencode/muse-spark-1.3-contributor-free";
+async function ladder(url: string, common: CommonArgs): Promise<void> {
+  const base: CommonArgs = { ...common, yes: true, brainResolved: true, brain: "claude", stop: "visit" };
+  const brainFor = (model: string) => (model.includes("/") ? model.split("/")[0] : "claude");
+  // default is half haiku, half muse-spark (free): measured 2026-09-14, muse runs
+  // full sessions with the harness fixes and its trails are replication votes
+  const { detectBrains } = await import("./brain/catalog.js");
+  const haveOpencode = (await detectBrains()).some((b) => b.spec.id === "opencode" && b.installed);
+  const spec = common.wide ?? (haveOpencode ? `haiku:5,${MUSE}:5` : "haiku");
+  const groups = spec.split(",").map((g) => {
+    const [model, n] = g.split(":");
+    return { model: model.trim(), n: n ? parseInt(n, 10) : undefined };
+  });
+
+  // 1. wide: the site's personas, split across the wide models in order
+  console.log(`\n  ladder on ${siteSlug(url)}: wide ${groups.map((g) => g.model + (g.n ? ` ×${g.n}` : "")).join(" + ")} → filter → sonnet verifies → opus digs\n`);
+  const site = siteSlug(url);
+  const dirs: string[] = [];
+  // today's wide sessions count: a ladder rerun after a crash or a limit does not pay for the sweep twice
+  const today = new Date().toISOString().slice(0, 10);
+  const reuse = findSessionDirs(`${RUNS_ROOT}/${site}`).filter((d) => d.includes(`/${today}/`) && groups.some((g) => modelOf(d) === g.model));
+  if (reuse.length && !common.personas?.length) {
+    console.log(`  reusing ${reuse.length} wide session(s) from today\n`);
+    dirs.push(...reuse);
+  } else {
+    // the first visit builds the brief, the map and the personas if they are missing
+    const first = await visit(url, { ...base, brain: brainFor(groups[0].model), model: groups[0].model, stop: "personas" });
+    void first;
+    const ids = common.personas?.length ? common.personas : Object.keys(siteOwnPersonas(url));
+    let at = 0;
+    for (const g of groups) {
+      const slice = g.n ? ids.slice(at, at + g.n) : ids.slice(at);
+      at += slice.length;
+      if (!slice.length) continue;
+      dirs.push(...(await visit(url, { ...base, brain: brainFor(g.model), model: g.model, personas: slice })));
+    }
+  }
+  if (!dirs.length) return;
+
+  // 2. filter: which sessions cite what other sessions also cite
+  await report(dirs, true);
+  const sightings = collectSightings(dirs);
+  const rows = replicationTable(sightings);
+  let top = topSessions(sightings, rows, 3);
+  if (!top.length) {
+    // nothing replicated yet: verify the walkouts with reasons, they are the findings
+    top = loadSessions(dirs).filter((s) => s.meta.exit.kind === "abandoned").slice(0, 3).map((s) => s.dir);
+  }
+  const replicated = rows.filter((r) => r.sessions >= 2).length;
+  console.log(`\n  filter: ${replicated} replicated ref(s), ${rows.length - replicated} single-source; ${top.length} session(s) go to the verifier\n`);
+  if (!top.length) return void console.log("  nothing to verify — no session abandoned or cited a shared element.\n");
+
+  // 3. verify
+  await fix(top, { ...base, brain: "claude", model: "sonnet" }, true);
+
+  // 4. deep: opus re-walks the persona behind the top session, then the panel on that session
+  const pid = (JSON.parse(readFileSync(`${top[0]}/meta.json`, "utf8")) as { personaId: string }).personaId;
+  const deep = await visit(url, { ...base, brain: "claude", model: "opus", personas: [pid] });
+  if (deep.length) await fix(deep, { ...base, brain: "claude", model: "opus" }, true);
+  await report([...dirs, ...deep], true);
+  console.log(`\n  ladder done: ${dirs.length} wide + ${deep.length} deep session(s). Read runs/${siteSlug(url)}/AGGREGATE.md, then FIXES.md in ${[...top, ...deep].map(dirLabel).join(", ")}.\n`);
+}
+
+/**
+ * Run one website order end to end: the normal pipeline, the PDF, one email.
+ * Or decline it with a reason. The order is marked only after the email went.
+ */
+async function runOrder(id: string, common: CommonArgs, reject?: string): Promise<void> {
+  const cfg = mailConfig();
+  if (!cfg) {
+    console.error("orders need mail configured (.env) — the report goes out by email");
+    process.exit(1);
+  }
+  const order = await getOrder(id);
+  if (reject !== undefined) {
+    const text = `Hi,\n\nWe could not run client-simulator against ${order.url}: ${reject || "no reason given"}.\n\n— client-simulator`;
+    if (!(await smtpSend(order.email, mimeWithAttachment({ from: cfg.user, to: order.email, subject: `client-simulator: ${siteSlug(normalizeUrl(order.url))}`, text })))) {
+      console.error("  email failed; order left as is");
+      process.exit(1);
+    }
+    await setOrderStatus(id, "rejected", reject);
+    return void console.log(`  ${id} rejected, ${order.email} told.\n`);
+  }
+
+  const url = normalizeUrl(order.url);
+  console.log(`\n  order ${id}: ${url} for ${order.email}\n`);
+  common.yes = true;
+  common.headless = true;
+  await all(url, common);
+  await pdf([url]);
+  const out = `${RUNS_ROOT}/${siteSlug(url)}/${siteSlug(url)}-report.pdf`;
+  if (!existsSync(out)) {
+    console.error(`  no PDF at ${out}; order left as is`);
+    process.exit(1);
+  }
+  const text = `Hi,\n\nAttached is what simulated prospects hit on ${url}. Read it as risk signals, not measured traffic: each finding names the page, who walked out, and how to check it yourself.\n\nReply to this email with what was right and what was not — that is how the tool gets better.\n\n— client-simulator`;
+  if (!(await smtpSend(order.email, mimeWithAttachment({ from: cfg.user, to: order.email, subject: `client-simulator report: ${siteSlug(url)}`, text, pdfPath: out })))) {
+    console.error("  email failed; order left as new so you can retry");
+    process.exit(1);
+  }
+  await setOrderStatus(id, "done", `sent ${new Date().toISOString().slice(0, 10)}`);
+  console.log(`  ${id} done: ${out} sent to ${order.email}\n`);
 }
 
 /** STAGE 3 — expert panel over sessions. Requires stage 2 (aggregate) unless forced. */
@@ -1201,30 +1416,100 @@ async function all(url: string, common: CommonArgs) {
  * work for both protocols, and smtp.<host> pairs with imap.<host> everywhere
  * we have seen; anywhere it doesn't, the manual-send fallback still stands.
  */
-async function smtpSelfSend(to: string): Promise<boolean> {
+/** One raw MIME message out through the account's SMTP, via curl. */
+async function smtpSend(to: string, mime: string): Promise<boolean> {
   const cfg = mailConfig();
   if (!cfg) return false;
   const smtpHost = cfg.host.replace(/^imap\./, "smtp.");
-  const msg = [
-    `From: ${cfg.user}`,
-    `To: ${to}`,
-    `Subject: client-simulator mailtest`,
-    ``,
-    `Your verification code is 424242.`,
-    ``,
-  ].join("\r\n");
   try {
     await execa(
       "curl",
       ["-sS", "--ssl-reqd", `smtps://${smtpHost}:465`,
        "--mail-from", cfg.user, "--mail-rcpt", to,
        "--user", `${cfg.user}:${cfg.pass}`, "-T", "-"],
-      { input: msg, timeout: 30_000 },
+      { input: mime, timeout: 60_000 },
     );
     return true;
   } catch {
     return false;
   }
+}
+
+async function smtpSelfSend(to: string, label = "probe 1"): Promise<boolean> {
+  const cfg = mailConfig();
+  if (!cfg) return false;
+  return smtpSend(to, mimeWithAttachment({ from: cfg.user, to, subject: `client-simulator mailtest ${label}`, text: "Your verification code is 424242." }));
+}
+
+/**
+ * One probe through the real path: mint a box, SMTP a message to it, poll
+ * until it lands. Returns the latency in seconds, or null if it never came.
+ */
+async function probeMail(mail: ImapProvider, maxMs: number): Promise<number | null> {
+  const box = await mail.create("mailprobe");
+  const started = Date.now();
+  let latency: number | null = null;
+  try {
+    if (!(await smtpSelfSend(box.address, "probe"))) return null;
+    while (Date.now() - started < maxMs) {
+      if ((await mail.fetchNew(box)).length) {
+        latency = Math.round((Date.now() - started) / 1000);
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+  } catch {
+    return null;
+  } finally {
+    await mail.destroy(box).catch(() => {});
+    await mail.close?.().catch(() => {});
+  }
+  return latency;
+}
+
+/**
+ * The mail path is checked before a run, not trusted. A persona that says "the
+ * email never came" is only evidence about the site if our own mail was working
+ * that day; seven findings were once filed against a site because it was not.
+ * A self-sent probe proves SMTP, credentials and the IMAP box — not that the
+ * catch-all forwarder delivers, because Gmail shows us our own Sent copy either
+ * way. Inbound delivery is proven only by mail from someone else, which the
+ * queue records as it happens (`inboundSeen`). One probe a day, stamped on
+ * every session's meta.json.
+ */
+async function ensureMailProbe(): Promise<MailProbe | null> {
+  const cfg = mailConfig();
+  if (!cfg) return null;
+  const recent = recentMailProbe();
+  if (recent) return recent;
+  process.stdout.write("  \x1b[2mchecking the mailbox (SMTP + IMAP, up to 5 minutes)...\x1b[0m");
+  const latency = await probeMail(new ImapProvider(cfg), 300_000);
+  if (process.stdout.isTTY) {
+    process.stdout.clearLine(0);
+    process.stdout.cursorTo(0);
+  }
+  const probe: MailProbe = { at: new Date().toISOString(), ok: latency !== null, latencySeconds: latency };
+  saveMailProbe(probe);
+  console.log(
+    probe.ok
+      ? `  mail: SMTP and mailbox reachable (${latency}s)`
+      : `  ⚠ mail: our own probe never showed up in 5 minutes — SMTP or IMAP is broken (run --mailtest)`,
+  );
+  return probe;
+}
+
+/** Sessions that gave up over email, with a real inbox check behind them. */
+function emailAbandons(dirs: string[]): string[] {
+  return loadSessions(dirs)
+    .filter(
+      (s) =>
+        s.meta.exit.kind === "abandoned" &&
+        /email|inbox|verification (code|link)|magic link|confirmation (email|link)|never (arrived|came|received)/i.test(
+          s.meta.exit.reason,
+        ) &&
+        s.events.some((e) => e.decision.action.type === "check_email"),
+    )
+    .map((s) => s.dir);
 }
 
 async function mailtest() {
@@ -1241,19 +1526,34 @@ async function mailtest() {
 
   // Box lifecycle alone proves nothing about delivery — a run once blamed a
   // site for "the magic link never arrived" when the inbox was ours to fix.
-  // Send ourselves one through SMTP so the test covers the inbound path too.
-  if (await smtpSelfSend(box.address)) {
-    console.log(`  ✉ test email sent to it via SMTP — waiting for it to land.\n`);
+  // Send ourselves TWO probes at different times (t=0 and t=60s) and report
+  // each one's latency: real deliveries have taken up to 5 minutes, and one
+  // lucky email says nothing about whether delivery still works a minute in.
+  const smtpOk = await smtpSelfSend(box.address);
+  if (smtpOk) {
+    console.log(`  ✉ probe 1 sent via SMTP — a second follows at 60s. Waiting up to 5 minutes.`);
+    console.log(`  (a self-sent probe proves SMTP + IMAP; to prove the forwarder, also send one to that address from another account now)\n`);
   } else {
     console.log(`\n  → SMTP self-send failed; send any email to that address now (from another account).\n`);
   }
 
-  const deadline = Date.now() + 120_000;
+  const started = Date.now();
+  const deadline = started + 300_000;
+  const wanted = smtpOk ? 2 : 1;
+  let secondSent = !smtpOk;
   let msgs: MailMessage[] = [];
   try {
     while (Date.now() < deadline) {
-      msgs = await mail.provider.fetchNew(box);
-      if (msgs.length > 0) break;
+      if (!secondSent && Date.now() - started >= 60_000) {
+        secondSent = true;
+        if (await smtpSelfSend(box.address, "probe 2")) console.log(`  ✉ probe 2 sent (t=60s)`);
+      }
+      const fresh = await mail.provider.fetchNew(box);
+      for (const m of fresh) {
+        console.log(`  📬 arrived after ${Math.round((Date.now() - started) / 1000)}s: ${m.subject}`);
+      }
+      msgs.push(...fresh);
+      if (msgs.length >= wanted && secondSent) break;
       process.stdout.write("  waiting for mail...\r");
       await new Promise((r) => setTimeout(r, 5000));
     }
@@ -1273,8 +1573,11 @@ async function mailtest() {
   console.log("");
 
   if (msgs.length === 0) {
-    console.log("  ⏱ no mail arrived within 2 minutes.");
+    console.log("  ⏱ mail not reached within 5 minutes — do NOT trust email verdicts from runs until this passes.");
+    process.exitCode = 1; // so `--mailtest && <sweep>` stops here
   } else {
+    if (msgs.length < wanted)
+      console.log(`  ⚠ only ${msgs.length}/${wanted} probes arrived within 5 minutes.`);
     for (const m of msgs) {
       console.log(`  📩 from: ${m.from}`);
       console.log(`     subject: ${m.subject}`);
@@ -1709,7 +2012,10 @@ async function main() {
   }
   if (argv.includes("--replication")) {
     const { collectSightings, replicationTable, renderReplication } = await import("./log/replication.js");
-    const dirs = positionals.length ? positionals : findSessionDirs();
+    // a site or date folder expands to the sessions under it; a session dir is itself
+    const dirs = positionals.length
+      ? positionals.flatMap((d) => (existsSync(`${d}/meta.json`) ? [d] : findSessionDirs(d)))
+      : findSessionDirs();
     if (!dirs.length) {
       console.error("\n  No sessions to analyse yet — run a visit first.\n");
       process.exit(1);
@@ -1724,6 +2030,27 @@ async function main() {
   }
   if (argv.includes("--pdf")) {
     return void (await pdf(positionals));
+  }
+  if (argv.includes("--ladder")) {
+    const url = positionals[0];
+    if (!url) {
+      console.error("--ladder needs a site: client-simulator <url> --ladder");
+      process.exit(1);
+    }
+    return void (await ladder(normalizeUrl(url), common));
+  }
+  if (argv.includes("--orders")) {
+    loadDotEnv();
+    return void console.log("\n" + renderOrders(await listOrders(argv.includes("--all"))));
+  }
+  if (argv.includes("--order")) {
+    loadDotEnv();
+    const id = flagValue(argv, "--order");
+    if (!id) {
+      console.error("--order needs an id from --orders");
+      process.exit(1);
+    }
+    return void (await runOrder(id, common, flagValue(argv, "--reject")));
   }
 
   const url = positionals[0];
