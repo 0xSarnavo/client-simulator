@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, resolve } from "node:path";
 import { BrowserDriver } from "./browser/driver.js";
 import { getBrain } from "./brain/index.js";
 import { PERSONAS } from "./persona/presets.js";
@@ -18,7 +18,7 @@ import { stringify as stringifyYaml } from "yaml";
 import { runSession } from "./session.js";
 import { generateReport, journeySeconds } from "./log/report.js";
 import { generateAggregate, generateDetail, loadSessions } from "./log/aggregate.js";
-import { RUNS_ROOT, dirLabel, findSessionDirs, sessionPath, siteSlug } from "./runs.js";
+import { RUNS_ROOT, dirLabel, findSessionDirs, modelSlug, newRunDir, runDirOf, runDirs, seatOf, sessionPath, siteSlug, type Seat } from "./runs.js";
 import { EXPERTS } from "./experts/index.js";
 import type { Brain, ExitReason, Persona, StepEvent } from "./types.js";
 import type { MailProvider, Mailbox, MailMessage } from "./mail/types.js";
@@ -49,6 +49,7 @@ const MAX_RUNS = 10;
 /** Stages, in the order they must run. `--stop <stage>` ends after one of these. */
 const STAGES = ["site", "map", "personas", "visit", "report", "fix"] as const;
 type Stage = (typeof STAGES)[number];
+const PROCESS_START = Date.now();
 
 /** Interactive run planner: how many cold/warm/hot, then random order */
 async function promptRunPlan(): Promise<string[]> {
@@ -165,28 +166,22 @@ function setupMail(): { provider: MailProvider } | null {
 }
 
 function printUsage() {
-  console.log(`client-simulator - synthetic clients that walk your onboarding and report where they leave
+  console.log(`client-simulator — simulated prospects walk your signup and say where they gave up
 
-USAGE:
-  client-simulator <url> [options]
+  client-simulator <url> --ladder --yes --headless   the full run, about an hour
+  client-simulator <url>                             a plain run, one model, menus for the rest
+  client-simulator <url> --goal "sign up and get an API key" --steps 15 --yes   pass/fail for CI
 
-  That is the whole tool. Point it at a site and it reads the page, writes a
-  brief, builds prospects who fit the product, sends them through, aggregates
-  the funnel, and runs the expert panel. It asks only what it cannot work out.
-
-    client-simulator site-a.dev                  the lot
-    client-simulator site-a.dev --yes            the lot, asking nothing
-    client-simulator site-a.dev --stop personas  just read it and build prospects
-    client-simulator site-a.dev --persona cold --headless
-
-  Run it bare for a guided flow: \`client-simulator\`
+  Then read runs/<site>/AGGREGATE.md (the one-page report) and REPORT.md beside it.
+  client-simulator --history shows every run with its one number. Bare "client-simulator"
+  opens a guided flow.
 
 STAGES, in order:
   site      read the page  -> runs/<site>/SITE.md
   map       crawl 2 clicks -> runs/<site>/MAP.md (pages, booking/payment surfaces)
   personas  build prospects-> runs/<site>/personas/
   visit     send them      -> one session each
-  report    the funnel     -> runs/<site>/AGGREGATE.md
+  report    the report     -> runs/<site>/<date>/<time>/AGGREGATE.md (copied to runs/<site>/)
   fix       expert panel   -> FIXES.md per session
 
   --ladder [--wide <spec>]    the measured fleet: haiku visits every persona, the
@@ -198,11 +193,12 @@ STAGES, in order:
                               dashboard" — checkpoints are drafted for review,
                               sessions are scored against them (runs/<site>/FLOW.md)
   --plan                      re-read the site and rebuild its personas
+  --no-map                    skip the re-crawl that checks whether the site changed
   --force                     regenerate outputs that are already up to date
 
 WHO GOES IN:
   --persona <list>            explicit queue, e.g. cold,warm,hot (max 10)
-  --runs <n>                  n prospects, chosen at random (max 10)
+  --random <n>                n prospects, chosen at random (max 10)
                               omit both and it offers the personas built for this site
   --goal "<text>"             goal test: every queued persona gets this goal, and the
                               process exits 0 only if every session completes it —
@@ -224,11 +220,11 @@ HOW IT RUNS:
   --mobile                    phone viewport (390x844, touch) instead of desktop
   --yes                       never prompt; take the default for every question
 
-ON ITS OWN:
-  --report [dirs...]          aggregate past sessions into a funnel
-  --replication [dirs...]     element refs cited across sessions: replicated vs single-source
-                              add --by-model for a funnel per model too
-  --fix <dirs...>             expert panel over past sessions -> FIXES.md
+ON ITS OWN — <what> is a site name (its newest run), site/date/time, or a folder:
+  --history [site]            every run, one line each: date, one number, seats
+  --report [what...]          rebuild the reports for those sessions
+  --fix [what...]             expert panel over those sessions -> FIXES.md
+  --replication [what...]     element refs cited across sessions: replicated vs single-source
   --orders [--all]            run requests left on the website (new ones, or all)
   --order <id> [--reject "why"]  run one order here: pipeline, PDF, email — or decline it
   --pdf [sites...]            one shareable PDF per site (funnel + all fixes)
@@ -241,7 +237,9 @@ ON ITS OWN:
 PER SITE, ON DISK:
   runs/<site>/SITE.md         what the page sells, to whom, its walls and tripwires
   runs/<site>/personas/       the prospects built for this product
-  runs/<site>/AGGREGATE.md    the funnel across every session
+  runs/<site>/<date>/<time>/  one run: RUN.md, AGGREGATE.md, DETAIL.md, VERIFIED.md, REPORT.md
+                              and wide/ verify/ deep/<model>/ for the sessions behind them
+  runs/<site>/AGGREGATE.md    a copy of the newest run's report (same for the other four files)
 
 Prior knowledge is rationed by temperature, because that is most of what makes
 the three behave differently: cold arrives knowing nothing, warm knows what it
@@ -279,6 +277,12 @@ interface CommonArgs {
   wide?: string;
   /** last stage to run; undefined means all three */
   stop?: Stage;
+  /** runs/<site>/<date>/<time> for this invocation; minted on the first visit */
+  runDir?: string;
+  /** which seat the sessions of the next visit fill (wide by default) */
+  seat?: Seat;
+  /** skip the per-run re-crawl when a map already exists */
+  noMap?: boolean;
 }
 
 function parseCommon(argv: string[]): CommonArgs {
@@ -296,7 +300,7 @@ function parseCommon(argv: string[]): CommonArgs {
     const a = argv[i];
     if (a === "--personas" || a === "--persona")
       args.personas = value(++i, a).split(",").map((s) => s.trim()).filter(Boolean);
-    else if (a === "--runs") args.runs = parseInt(value(++i, a), 10);
+    else if (a === "--random" || a === "--runs") args.runs = parseInt(value(++i, a), 10);
     else if (a === "--time") {
       const t = parseInt(value(++i, a), 10);
       if (!Number.isFinite(t) || t < 1 || t > 120) {
@@ -346,6 +350,7 @@ function parseCommon(argv: string[]): CommonArgs {
     else if (a === "--headless") args.headless = true;
     else if (a === "--mobile") args.mobile = true;
     else if (a === "--plan") args.plan = true;
+    else if (a === "--no-map") args.noMap = true;
     else if (a === "--yes" || a === "-y") args.yes = true;
   }
   return args;
@@ -420,11 +425,19 @@ function briefPathLabel(url: string): string {
  * Crawl the site once so the aggregate can say which pages no prospect ever
  * found. No brain involved; `--plan` re-crawls.
  */
-async function prepareMap(url: string, common: CommonArgs): Promise<void> {
-  const fresh = !loadMap(url) || common.plan;
-  if (fresh) process.stdout.write("  \x1b[2mcrawling the site...\x1b[0m");
-  const map = await ensureMap(url, { force: common.plan });
-  if (fresh && process.stdout.isTTY) {
+async function prepareMap(
+  url: string,
+  common: CommonArgs,
+  brain: Brain & { ask?(prompt: string): Promise<string> },
+): Promise<void> {
+  // the crawl is free, so every run re-crawls; the brief and personas are only
+  // rebuilt when the page list moved and the operator says so
+  const before = common.plan ? null : loadMap(url);
+  // once per process: the ladder calls visit() four times and the site did not move in between
+  if (before && (common.noMap || Date.parse(before.generated) >= PROCESS_START)) return;
+  process.stdout.write(`  \x1b[2m${before ? "re-crawling to check for changes" : "crawling the site"}...\x1b[0m`);
+  const map = await ensureMap(url, { force: true });
+  if (process.stdout.isTTY) {
     process.stdout.clearLine(0);
     process.stdout.cursorTo(0);
   }
@@ -437,6 +450,28 @@ async function prepareMap(url: string, common: CommonArgs): Promise<void> {
   for (const p of map.pages.filter((p) => p.kind === "booking" || p.kind === "payment"))
     console.log(`  ${p.kind.padEnd(8)} ${p.url}${p.external ? " (off-site)" : ""} — commit refused by the guard`);
   console.log(`\n  map: runs/${siteSlug(url)}/MAP.md\n`);
+
+  if (before) {
+    const was = new Set(before.pages.map((p) => p.url));
+    const now = new Set(map.pages.map((p) => p.url));
+    const added = [...now].filter((u) => !was.has(u)).length;
+    const gone = [...was].filter((u) => !now.has(u)).length;
+    if (!added && !gone) return;
+    console.log(`  the map changed since ${before.generated.slice(0, 10)}: +${added} page(s), -${gone}`);
+    const rebuild =
+      !common.yes && isInteractive()
+        ? await select({
+            message: "The site changed. Rebuild the brief and personas from scratch?",
+            choices: [
+              { label: "keep the existing brief and personas", value: false },
+              { label: "rebuild both from scratch", value: true, hint: "two model calls" },
+            ],
+          })
+        : false;
+    if (!rebuild) return void console.log(`  keeping the brief and personas (pass --plan to rebuild)\n`);
+    common.plan = true;
+    await prepareSite(url, common, brain);
+  }
 }
 
 /**
@@ -682,7 +717,7 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
     return [];
   }
   stageBanner("map", common.stop);
-  await prepareMap(url, common);
+  await prepareMap(url, common, planningBrain);
   if (!runsThrough("personas", common.stop)) {
     console.log(`  Stopped after the map. See runs/${siteSlug(url)}/MAP.md\n`);
     return [];
@@ -750,8 +785,9 @@ async function visit(url: string, common: CommonArgs): Promise<string[]> {
 
   // dirs are minted before anyone launches: sessionPath's same-second suffix
   // check is exists-then-create, which two concurrent starts would race
+  common.runDir ??= newRunDir(url);
   const runs = personaIds.map((pid, i) => {
-    const sessionDir = sessionPath(url, pid);
+    const sessionDir = sessionPath(common.runDir!, common.seat ?? "wide", common.model ?? common.brain, pid);
     mkdirSync(`${sessionDir}/shots`, { recursive: true });
     return { pid, sessionDir, n: i + 1 };
   });
@@ -966,10 +1002,138 @@ function printSessionSummary(
 }
 
 /**
- * STAGE 2 — aggregate per site. A funnel that mixed several websites together
- * would be meaningless, so each site gets its own runs/<site>/AGGREGATE.md.
+ * What a person may type where sessions are expected: a session folder, a run
+ * folder, a site folder, a site name ("site-b.ai" = its newest run), or
+ * "site/date/time" for one run.
  */
-async function report(dirs: string[] | undefined, force = false, byModel = false) {
+function resolveTargets(args: string[]): string[] {
+  return args.flatMap((a) => {
+    if (existsSync(`${a}/meta.json`)) return [a];
+    if (existsSync(a)) return findSessionDirs(a);
+    const [head, ...rest] = a.split("/");
+    const site = siteSlug(head);
+    if (rest.length) return findSessionDirs(`${RUNS_ROOT}/${site}/${rest.join("/")}`);
+    const latest = runDirs(site).at(-1);
+    return latest ? findSessionDirs(latest) : findSessionDirs(`${RUNS_ROOT}/${site}`);
+  });
+}
+
+/** "2 of 26 completed their goal." from a run's AGGREGATE.md, or null. */
+function oneNumber(run: string): string | null {
+  try {
+    return readFileSync(`${run}/AGGREGATE.md`, "utf8").match(/\*\*(\d+ of \d+ completed[^*]*)\*\*/)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** "wide haiku×20 muse×5 · deep opus×1" from a run's folders. */
+function seatsOf(run: string): string {
+  const parts: string[] = [];
+  for (const seat of ["wide", "verify", "deep"] as const) {
+    if (!existsSync(`${run}/${seat}`)) continue;
+    const models = readdirSync(`${run}/${seat}`, { withFileTypes: true }).filter((e) => e.isDirectory())
+      .map((m) => `${m.name.replace(/^opencode-/, "").split("-")[0]}×${readdirSync(`${run}/${seat}/${m.name}`, { withFileTypes: true }).filter((e) => e.isDirectory()).length}`);
+    parts.push(`${seat} ${models.join(" ")}`);
+  }
+  return parts.join(" · ");
+}
+
+/** --history [site]: one line per run, newest last. */
+function history(site?: string): void {
+  const sites = site ? [siteSlug(site)] : (existsSync(RUNS_ROOT) ? readdirSync(RUNS_ROOT) : []).filter((x) => runDirs(x).length);
+  if (!sites.length) return void console.log("\n  No runs yet.\n");
+  for (const x of sites) {
+    const runs = runDirs(x);
+    console.log(`\n  ${x}${runs.length ? "" : " — no runs in the current layout"}`);
+    for (const run of runs) {
+      const [, date, time] = dirLabel(run).split("/");
+      console.log(`    ${date} ${time}  ${(oneNumber(run) ?? "no report yet").padEnd(34)} ${seatsOf(run)}${existsSync(`${run}/REPORT.md`) ? "  REPORT.md" : ""}`);
+    }
+  }
+  console.log(`\n  Open: runs/<site>/<date>/<time>/AGGREGATE.md — or client-simulator --fix <site> for the newest run.\n`);
+}
+
+/** The result a person came for, in the terminal: the one number and the first wall. */
+function printOutcome(run: string | undefined): void {
+  if (!run || !existsSync(`${run}/AGGREGATE.md`)) return;
+  const md = readFileSync(`${run}/AGGREGATE.md`, "utf8");
+  const one = md.match(/## The one number\n\n(.+)/)?.[1];
+  const wall = md.match(/### 1\. (.+)/)?.[1];
+  const words = md.match(/\*\*In their words:\*\* (.+)/)?.[1];
+  console.log("");
+  if (one) console.log(`  ${one.replace(/\*\*/g, "")}`);
+  if (wall) console.log(`  Fix first: ${wall.replace(/`/g, "")}`);
+  if (words) console.log(`  ${words.length > 180 ? words.slice(0, 180) + "…" : words}`);
+  console.log(`\n  Full report: ${run}/AGGREGATE.md${existsSync(`${run}/REPORT.md`) ? `, then REPORT.md beside it` : ""}\n`);
+}
+
+/** <run>/<seat>/<model>/<leaf>/FIXES.md for every session in a seat, bundled into one file. */
+function bundleSeat(run: string, seat: Seat, file: string, title: string): void {
+  const parts: string[] = [];
+  for (const d of findSessionDirs(`${run}/${seat}`).concat(fixesOnlyDirs(`${run}/${seat}`)))
+    if (existsSync(`${d}/FIXES.md`)) parts.push(`<!-- ${dirLabel(d)} -->\n${readFileSync(`${d}/FIXES.md`, "utf8")}`);
+  if (parts.length) writeFileSync(`${run}/${file}`, `# ${basename(resolve(run, "../.."))} — ${title}\n\n${parts.join("\n\n---\n\n")}`);
+  else rmSync(`${run}/${file}`, { force: true });
+}
+
+/** verify/<model>/<leaf>/ holds a FIXES.md and no meta.json, so findSessionDirs skips it. */
+function fixesOnlyDirs(seatDir: string): string[] {
+  if (!existsSync(seatDir)) return [];
+  const out: string[] = [];
+  for (const model of readdirSync(seatDir, { withFileTypes: true }).filter((e) => e.isDirectory()))
+    for (const leaf of readdirSync(`${seatDir}/${model.name}`, { withFileTypes: true }).filter((e) => e.isDirectory()))
+      if (!existsSync(`${seatDir}/${model.name}/${leaf.name}/meta.json`)) out.push(resolve(`${seatDir}/${model.name}/${leaf.name}`));
+  return out;
+}
+
+/** RUN.md: which model sat in which seat, how the sessions ended, tokens spent. Derived, no bookkeeping. */
+function runSummary(run: string, dirs: string[]): string {
+  const sessions = loadSessions(dirs);
+  const site = basename(resolve(run, "../.."));
+  const rows = new Map<string, { n: number; completed: number; abandoned: number; guardrail: number; tokens: number; seconds: number }>();
+  for (const s of sessions) {
+    const key = `${seatOf(s.dir) ?? "wide"} | ${modelOf(s.dir) ?? s.meta.brain ?? "default"}`;
+    const r = rows.get(key) ?? { n: 0, completed: 0, abandoned: 0, guardrail: 0, tokens: 0, seconds: 0 };
+    r.n++;
+    r[s.meta.exit.kind]++;
+    // the zod meta drops unknown keys, so read usage and duration off the file itself
+    const raw = JSON.parse(readFileSync(`${s.dir}/meta.json`, "utf8")) as { usage?: Record<string, number>; durationSeconds?: number };
+    const u = raw.usage ?? {};
+    r.tokens += (u.inputTokens ?? 0) + (u.outputTokens ?? 0) + (u.cacheReadTokens ?? 0) + (u.cacheCreateTokens ?? 0);
+    r.seconds += raw.durationSeconds ?? 0;
+    rows.set(key, r);
+  }
+  const verifiers = fixesOnlyDirs(`${run}/verify`);
+  const L = [
+    `# ${site} — run ${dirLabel(run).split("/").slice(1).join(" ")}`,
+    "",
+    "| seat | model | sessions | completed | walked out | out of patience or harness | tokens | minutes |",
+    "|---|---|---|---|---|---|---|---|",
+    ...[...rows.entries()].sort().map(([k, r]) => `| ${k} | ${r.n} | ${r.completed} | ${r.abandoned} | ${r.guardrail} | ${r.tokens ? r.tokens.toLocaleString("en-US") : "—"} | ${Math.round(r.seconds / 60)} |`),
+  ];
+  if (verifiers.length) L.push("", `Verifier: ${[...new Set(verifiers.map((d) => basename(resolve(d, ".."))))].join(", ")} reviewed ${verifiers.length} session(s) → VERIFIED.md`);
+  const files = ["AGGREGATE.md", "DETAIL.md", "VERIFIED.md", "REPORT.md"].filter((f) => existsSync(`${run}/${f}`));
+  L.push("", `Files: ${files.join(", ")}. Read AGGREGATE.md first; REPORT.md is what the writer seat produced.`, "");
+  return L.join("\n");
+}
+
+/** The site level mirrors the newest run's files, so runs/<site>/AGGREGATE.md is always the latest. */
+function mirrorLatest(site: string): void {
+  const latest = runDirs(site).at(-1);
+  if (!latest) return;
+  for (const f of ["RUN.md", "AGGREGATE.md", "DETAIL.md", "VERIFIED.md", "REPORT.md"]) {
+    if (existsSync(`${latest}/${f}`)) copyFileSync(`${latest}/${f}`, `${RUNS_ROOT}/${site}/${f}`);
+    else rmSync(`${RUNS_ROOT}/${site}/${f}`, { force: true });
+  }
+}
+
+/**
+ * STAGE 2 — aggregate per run. A funnel that mixed several websites together
+ * would be meaningless, so each run gets its own AGGREGATE.md, each seat/model
+ * inside it gets one too, and the site level mirrors the newest run.
+ */
+async function report(dirs: string[] | undefined, force = false) {
   const targets = dirs?.length ? dirs : findSessionDirs();
   if (targets.length === 0) {
     console.error(
@@ -978,63 +1142,60 @@ async function report(dirs: string[] | undefined, force = false, byModel = false
     process.exit(1);
   }
 
-  // group by the site each session actually visited, not by where it sits on disk
-  const bySite = new Map<string, string[]>();
+  // group by the run each session sits in; a foreign layout groups under its site folder
+  const byRun = new Map<string, string[]>();
   for (const s of loadSessions(targets)) {
-    const site = siteSlug(s.meta.url);
-    bySite.set(site, [...(bySite.get(site) ?? []), s.dir]);
+    const run = runDirOf(s.dir) ?? resolve(`${RUNS_ROOT}/${siteSlug(s.meta.url)}`);
+    byRun.set(run, [...(byRun.get(run) ?? []), s.dir]);
   }
-
-  // per-model funnels alongside the combined one, so a sweep can be read
-  // "how did haiku do vs opus" as well as "how did the site do overall"
-  if (byModel) {
-    for (const [site, siteDirs] of bySite) {
-      const groups = new Map<string, string[]>();
-      for (const d of siteDirs) {
-        const m = modelOf(d) ?? "unknown";
-        groups.set(m, [...(groups.get(m) ?? []), d]);
-      }
-      for (const [model, mdirs] of groups) {
-        const out = `runs/${site}/AGGREGATE-${modelSlug(model)}.md`;
-        writeFileSync(out, `<!-- model: ${model} -->\n${generateDetail(mdirs)}`);
-        console.log(`  ${site} / ${model}: ${mdirs.length} session(s) → ${resolve(out)}`);
-      }
-    }
-  }
-
-  if (bySite.size === 0) {
+  if (byRun.size === 0) {
     console.error("No readable sessions (missing meta.json or session.jsonl).");
     process.exit(1);
   }
 
+  const sites = new Set<string>();
   let written = 0;
-  for (const [site, siteDirs] of bySite) {
-    const out = `runs/${site}/AGGREGATE.md`;
-    const manifestPath = `runs/${site}/.aggregate-manifest.json`;
-
-    if (!force && existsSync(manifestPath) && existsSync(out)) {
+  for (const [run, runDirsHere] of byRun) {
+    const site = basename(runDirOf(runDirsHere[0]) ? resolve(run, "../..") : run);
+    sites.add(site);
+    const manifestPath = `${run}/.aggregate-manifest.json`;
+    if (!force && existsSync(manifestPath) && existsSync(`${run}/AGGREGATE.md`)) {
       try {
         const prev = JSON.parse(readFileSync(manifestPath, "utf8")) as { dirs: string[] };
-        const same =
-          prev.dirs.length === siteDirs.length &&
-          prev.dirs.every((d, i) => resolve(d) === resolve(siteDirs[i]));
-        if (same) {
-          console.log(`  ${site}: up to date (${siteDirs.length} sessions) — --force to regenerate`);
+        if (prev.dirs.length === runDirsHere.length && prev.dirs.every((d, i) => resolve(d) === resolve(runDirsHere[i]))) {
+          console.log(`  ${dirLabel(run)}: up to date (${runDirsHere.length} sessions) — --force to regenerate`);
           continue;
         }
-        console.log(`  ${site}: ${prev.dirs.length} → ${siteDirs.length} sessions, regenerating...`);
+        console.log(`  ${dirLabel(run)}: ${prev.dirs.length} → ${runDirsHere.length} sessions, regenerating...`);
       } catch {
         // corrupt manifest → regenerate
       }
     }
 
-    mkdirSync(`runs/${site}`, { recursive: true });
-    writeFileSync(out, generateAggregate(siteDirs));
-    writeFileSync(`runs/${site}/DETAIL.md`, generateDetail(siteDirs));
-    writeFileSync(manifestPath, JSON.stringify({ dirs: siteDirs }, null, 2));
-    console.log(`  ${site}: ${siteDirs.length} session(s) → ${resolve(out)}`);
+    // one report per seat/model beside those sessions: "how did haiku do" next to "how did the site do"
+    const groups = new Map<string, string[]>();
+    for (const d of runDirsHere) {
+      const seat = seatOf(d);
+      if (seat) groups.set(`${seat}/${modelSlug(modelOf(d))}`, [...(groups.get(`${seat}/${modelSlug(modelOf(d))}`) ?? []), d]);
+    }
+    for (const [sub, mdirs] of groups) {
+      writeFileSync(`${run}/${sub}/AGGREGATE.md`, generateAggregate(mdirs));
+      writeFileSync(`${run}/${sub}/DETAIL.md`, generateDetail(mdirs));
+    }
+
+    mkdirSync(run, { recursive: true });
+    writeFileSync(`${run}/AGGREGATE.md`, generateAggregate(runDirsHere));
+    writeFileSync(`${run}/DETAIL.md`, generateDetail(runDirsHere));
+    if (runDirOf(runDirsHere[0])) {
+      bundleSeat(run, "verify", "VERIFIED.md", "verified: the sessions the filter chose, reviewed by the verifier seat");
+      bundleSeat(run, "deep", "REPORT.md", "the report: the writer seat re-walked the hardest prospect");
+      writeFileSync(`${run}/RUN.md`, runSummary(run, runDirsHere));
+    }
+    writeFileSync(manifestPath, JSON.stringify({ dirs: runDirsHere }, null, 2));
+    console.log(`  ${dirLabel(run)}: ${runDirsHere.length} session(s) → ${run}/AGGREGATE.md`);
     written++;
   }
+  for (const site of sites) mirrorLatest(site);
 
   if (written > 0) console.log("");
 }
@@ -1051,11 +1212,6 @@ function modelOf(dir: string): string | null {
   } catch {
     return null;
   }
-}
-
-/** Model id → filename-safe slug (opencode/big-pickle → opencode-big-pickle). */
-function modelSlug(model: string): string {
-  return model.replace(/[^a-zA-Z0-9._-]+/g, "-");
 }
 
 /**
@@ -1102,6 +1258,9 @@ async function pdf(sites: string[], model?: string) {
  * never write anything a founder sees.
  */
 const MUSE = "opencode/muse-spark-1.3-contributor-free";
+/** who sits in the verify and deep seats; the layout does not care, RUN.md records it */
+const VERIFIER = "sonnet";
+const WRITER = "opus";
 async function ladder(url: string, common: CommonArgs): Promise<void> {
   const base: CommonArgs = { ...common, yes: true, brainResolved: true, brain: "claude", stop: "visit" };
   const brainFor = (model: string) => (model.includes("/") ? model.split("/")[0] : "claude");
@@ -1119,11 +1278,16 @@ async function ladder(url: string, common: CommonArgs): Promise<void> {
   console.log(`\n  ladder on ${siteSlug(url)}: wide ${groups.map((g) => g.model + (g.n ? ` ×${g.n}` : "")).join(" + ")} → filter → sonnet verifies → opus digs\n`);
   const site = siteSlug(url);
   const dirs: string[] = [];
-  // today's wide sessions count: a ladder rerun after a crash or a limit does not pay for the sweep twice
+  // a run from today that never reached REPORT.md is picked up where it stopped:
+  // a rerun after a crash or a usage limit does not pay for the sweep twice
   const today = new Date().toISOString().slice(0, 10);
-  const reuse = findSessionDirs(`${RUNS_ROOT}/${site}`).filter((d) => d.includes(`/${today}/`) && groups.some((g) => modelOf(d) === g.model));
+  const unfinished = runDirs(site).filter((r) => r.includes(`/${today}/`) && existsSync(`${r}/.ladder`) && !existsSync(`${r}/REPORT.md`)).at(-1);
+  base.runDir = unfinished ?? newRunDir(url);
+  mkdirSync(base.runDir, { recursive: true });
+  writeFileSync(`${base.runDir}/.ladder`, ""); // marks a ladder run, so a plain run from today is never resumed as one
+  const reuse = unfinished ? findSessionDirs(`${unfinished}/wide`).filter((d) => groups.some((g) => modelOf(d) === g.model)) : [];
   if (reuse.length && !common.personas?.length) {
-    console.log(`  reusing ${reuse.length} wide session(s) from today\n`);
+    console.log(`  reusing ${reuse.length} wide session(s) from ${dirLabel(unfinished!)}\n`);
     dirs.push(...reuse);
   } else {
     // the first visit builds the brief, the map and the personas if they are missing
@@ -1153,15 +1317,16 @@ async function ladder(url: string, common: CommonArgs): Promise<void> {
   console.log(`\n  filter: ${replicated} replicated ref(s), ${rows.length - replicated} single-source; ${top.length} session(s) go to the verifier\n`);
   if (!top.length) return void console.log("  nothing to verify — no session abandoned or cited a shared element.\n");
 
-  // 3. verify
-  await fix(top, { ...base, brain: "claude", model: "sonnet" }, true);
+  // 3. verify: the verifier's panels land in verify/<model>/, beside the run
+  await fix(top, { ...base, brain: "claude", model: VERIFIER }, true, `${base.runDir}/verify/${modelSlug(VERIFIER)}`);
 
-  // 4. deep: opus re-walks the persona behind the top session, then the panel on that session
+  // 4. deep: the writer re-walks the persona behind the top session, then the panel on that session
   const pid = (JSON.parse(readFileSync(`${top[0]}/meta.json`, "utf8")) as { personaId: string }).personaId;
-  const deep = await visit(url, { ...base, brain: "claude", model: "opus", personas: [pid] });
-  if (deep.length) await fix(deep, { ...base, brain: "claude", model: "opus" }, true);
+  const deep = await visit(url, { ...base, brain: "claude", model: WRITER, seat: "deep", personas: [pid] });
+  if (deep.length) await fix(deep, { ...base, brain: "claude", model: WRITER }, true);
   await report([...dirs, ...deep], true);
-  console.log(`\n  ladder done: ${dirs.length} wide + ${deep.length} deep session(s). Read runs/${siteSlug(url)}/AGGREGATE.md, then FIXES.md in ${[...top, ...deep].map(dirLabel).join(", ")}.\n`);
+  console.log(`\n  ladder done: ${dirs.length} wide + ${deep.length} deep session(s). VERIFIED.md and REPORT.md sit beside the report, mirrored at runs/${site}/.`);
+  printOutcome(base.runDir);
 }
 
 /**
@@ -1206,7 +1371,7 @@ async function runOrder(id: string, common: CommonArgs, reject?: string): Promis
 }
 
 /** STAGE 3 — expert panel over sessions. Requires stage 2 (aggregate) unless forced. */
-async function fix(dirs: string[], common: CommonArgs, force = false) {
+async function fix(dirs: string[], common: CommonArgs, force = false, outDir?: string) {
   if (dirs.length === 0) {
     console.error(
       "Usage: client-simulator fix <dir> [moreDirs...] [--brain ...] [--force]",
@@ -1233,14 +1398,16 @@ async function fix(dirs: string[], common: CommonArgs, force = false) {
   await resolveBrain(common, "Which AI runs the expert panel?");
 
   for (const s of sessions) {
-    if (!force && existsSync(`${s.dir}/FIXES.md`)) {
+    // the verifier seat writes beside the run, not into the session it reviewed
+    const target = outDir ? `${outDir}/${basename(s.dir)}` : s.dir;
+    if (!force && existsSync(`${target}/FIXES.md`)) {
       console.log(
         `\n  ${dirLabel(s.dir)}: FIXES.md already exists — skipping (--force to re-run experts).`,
       );
       continue;
     }
     // scoped to this session's own site, or a persona generated for it is not
-    // in the registry and the panel reviews the run as Skeptical Sam
+    // in the registry and the panel reviews the run as Momus
     const registry = getPersonaRegistry(s.meta.url);
     const persona = registry.personas[s.meta.personaId] ?? PERSONAS.cold;
     if (!registry.personas[s.meta.personaId]) {
@@ -1295,8 +1462,9 @@ async function fix(dirs: string[], common: CommonArgs, force = false) {
     if (sections.length === 0) continue;
 
     const doc = `# Expert Fixes\n\nSession: \`${s.dir}\`\nSite: ${s.meta.url}\nPersona: ${persona.name} (${persona.temperature})\n\n---\n\n${sections.join("\n---\n\n")}\n`;
-    writeFileSync(`${s.dir}/FIXES.md`, doc);
-    console.log(`  Fixes → ${s.dir}/FIXES.md`);
+    mkdirSync(target, { recursive: true });
+    writeFileSync(`${target}/FIXES.md`, doc);
+    console.log(`  Fixes → ${target}/FIXES.md`);
   }
 }
 
@@ -1401,12 +1569,8 @@ async function all(url: string, common: CommonArgs) {
   stageBanner("fix", common.stop);
   await fix(dirs, common, true);
 
-  const sites = [...new Set(loadSessions(dirs).map((x) => siteSlug(x.meta.url)))];
-  console.log(
-    `\n  Done: ${dirs.length} session(s). See ${sites
-      .map((x) => `runs/${x}/SITE.md, runs/${x}/AGGREGATE.md`)
-      .join(", ")} + FIXES.md per session.\n`,
-  );
+  console.log(`\n  Done: ${dirs.length} session(s), FIXES.md beside each.`);
+  printOutcome(common.runDir);
 }
 
 /** Mailbox lifecycle test: create -> wait for real mail -> extract -> destroy */
@@ -1857,8 +2021,9 @@ async function wizard() {
   const action = await select({
     message: "What do you want to do?",
     choices: [
-      { value: "test", label: "test a site", hint: "read it, build prospects, send them, report" },
-      { value: "report", label: "report on past runs", hint: "aggregate sessions into a funnel" },
+      { value: "ladder", label: "the full run", hint: "about an hour: cheap models sweep, a verifier checks, a strong model writes" },
+      { value: "test", label: "a plain run", hint: "one model plays every prospect; pick how far it goes" },
+      { value: "history", label: "past runs", hint: "one line per run, with its one number" },
       { value: "fix", label: "review a past session", hint: "expert panel -> FIXES.md" },
       { value: "personas", label: "personas", hint: "list every persona you have" },
       { value: "doctor", label: "doctor", hint: "verify your environment" },
@@ -1868,6 +2033,18 @@ async function wizard() {
   const common: CommonArgs = { headless: false, mobile: false };
 
   switch (action) {
+    case "ladder": {
+      const url = await askUrl();
+      common.headless = await select({
+        message: "Show the browser windows?",
+        choices: [
+          { value: true, label: "no, run headless", hint: "faster, nothing pops up" },
+          { value: false, label: "yes, watch them" },
+        ],
+      });
+      await ladder(url, common);
+      break;
+    }
     case "test": {
       const url = await askUrl();
       const stop = await select<Stage | "">({
@@ -1883,22 +2060,19 @@ async function wizard() {
       await all(url, common);
       break;
     }
-    case "report":
-      await report(undefined, false);
+    case "history":
+      history();
       break;
     case "fix": {
-      const dirs = findSessionDirs();
-      if (dirs.length === 0) {
-        console.error("\n  No sessions to review yet — test a site first.\n");
-        process.exit(1);
-      }
+      const run = await pickRun();
+      if (!run) break;
+      const dirs = findSessionDirs(run);
       const dir = await select({
         message: "Which session?",
-        // show site/date/run, not just the leaf, so sessions stay distinguishable
-        choices: [...dirs].reverse().map((d) => ({ value: d, label: dirLabel(d) })),
+        choices: [...dirs].reverse().map((d) => ({ value: d, label: dirLabel(d).split("/").slice(3).join("/") })),
       });
       // stage 3 is gated on stage 2; in a guided flow just produce it
-      await report(undefined, false);
+      await report(dirs, false);
       await fix([dir], common, false);
       break;
     }
@@ -1915,11 +2089,30 @@ async function wizard() {
   }
 }
 
+/** Site, then run — newest first. Null when nothing has run yet. */
+async function pickRun(): Promise<string | null> {
+  const sites = (existsSync(RUNS_ROOT) ? readdirSync(RUNS_ROOT) : []).filter((x) => runDirs(x).length);
+  if (!sites.length) {
+    console.error("\n  No runs yet — test a site first.\n");
+    return null;
+  }
+  const site = sites.length === 1 ? sites[0] : await select({ message: "Which site?", choices: sites.map((x) => ({ value: x, label: x })) });
+  const runs = runDirs(site).reverse();
+  return runs.length === 1
+    ? runs[0]
+    : select({
+        message: "Which run?",
+        choices: runs.map((r) => ({ value: r, label: dirLabel(r).split("/").slice(1).join(" "), hint: oneNumber(r) ?? seatsOf(r) })),
+      });
+}
+
 const VALUE_FLAGS = new Set([
   "--persona",
   "--personas",
   "--brain",
   "--runs",
+  "--random",
+  "--wide",
   "--time",
   "--flow",
   "--model",
@@ -1999,8 +2192,9 @@ async function main() {
       ? await newPersonaInteractive(name)
       : personasCommand(["--new", name]));
   }
+  if (argv.includes("--history")) return history(positionals[0]);
   if (argv.includes("--fix")) {
-    const dirs = positionals.length ? positionals : findSessionDirs();
+    const dirs = positionals.length ? resolveTargets(positionals) : findSessionDirs();
     if (!dirs.length) {
       console.error("\n  No sessions to review yet — run a visit first.\n");
       process.exit(1);
@@ -2008,14 +2202,12 @@ async function main() {
     return void (await fix(dirs, common, force));
   }
   if (argv.includes("--report")) {
-    return void (await report(positionals.length ? positionals : undefined, force, argv.includes("--by-model")));
+    return void (await report(positionals.length ? resolveTargets(positionals) : undefined, force));
   }
   if (argv.includes("--replication")) {
     const { collectSightings, replicationTable, renderReplication } = await import("./log/replication.js");
     // a site or date folder expands to the sessions under it; a session dir is itself
-    const dirs = positionals.length
-      ? positionals.flatMap((d) => (existsSync(`${d}/meta.json`) ? [d] : findSessionDirs(d)))
-      : findSessionDirs();
+    const dirs = positionals.length ? resolveTargets(positionals) : findSessionDirs();
     if (!dirs.length) {
       console.error("\n  No sessions to analyse yet — run a visit first.\n");
       process.exit(1);

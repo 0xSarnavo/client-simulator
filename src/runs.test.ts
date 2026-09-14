@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, describe, it } from "node:test";
-import { dirLabel, findSessionDirs, sessionPath, siteSlug } from "./runs.js";
+import { dirLabel, findSessionDirs, modelSlug, newRunDir, runDirOf, runDirs, seatOf, sessionPath, siteSlug } from "./runs.js";
 
 const scratch = mkdtempSync(join(tmpdir(), "clientsim-runs-"));
 after(() => rmSync(scratch, { recursive: true, force: true }));
@@ -44,27 +44,48 @@ describe("siteSlug", () => {
 
 describe("sessionPath", () => {
   const when = new Date("2026-08-26T19:04:47.607Z");
+  const run = newRunDir("https://example.com", when, `${scratch}/a`);
 
-  it("files a run under site, then date, then time-persona", () => {
-    const p = sessionPath("https://example.com", "cold", when, `${scratch}/a`);
-    assert.equal(p, resolve(`${scratch}/a/example.com/2026-08-26/19-04-47-cold`));
+  it("files a run under site, date, time", () => {
+    assert.equal(run, resolve(`${scratch}/a/example.com/2026-08-26/19-04-47`));
+  });
+
+  it("files a session under the run, then seat, model, time-persona", () => {
+    const p = sessionPath(run, "wide", "haiku", "cold", when);
+    assert.equal(p, `${run}/wide/haiku/19-04-47-cold`);
+    assert.equal(seatOf(p), "wide");
+    assert.equal(runDirOf(p), run);
+  });
+
+  it("slugs a model id with a slash and falls back to default", () => {
+    assert.equal(modelSlug("opencode/muse-spark-1.3-contributor-free"), "opencode-muse-spark-1.3-contributor-free");
+    assert.equal(modelSlug(null), "default");
+    assert.ok(sessionPath(run, "deep", undefined, "cold", when).includes("/deep/default/"));
   });
 
   it("suffixes rather than overwriting when two runs share a second", () => {
-    const root = `${scratch}/b`;
-    const first = sessionPath("https://example.com", "cold", when, root);
+    const first = sessionPath(run, "wide", "haiku", "cold", when);
     mkdirSync(first, { recursive: true });
-    const second = sessionPath("https://example.com", "cold", when, root);
+    const second = sessionPath(run, "wide", "haiku", "cold", when);
     assert.notEqual(second, first);
     assert.ok(second.endsWith("19-04-47-cold-2"), second);
   });
 
   it("separates personas that run in the same second", () => {
-    const root = `${scratch}/c`;
-    assert.notEqual(
-      sessionPath("https://example.com", "cold", when, root),
-      sessionPath("https://example.com", "hot", when, root),
-    );
+    assert.notEqual(sessionPath(run, "wide", "haiku", "cold", when), sessionPath(run, "wide", "haiku", "hot", when));
+  });
+
+  it("knows a foreign layout when it sees one", () => {
+    assert.equal(seatOf("/x/runs/example.com/2026-08-26/19-04-47-cold"), null);
+    assert.equal(runDirOf("/x/runs/example.com/2026-08-26/19-04-47-cold"), null);
+  });
+
+  it("lists a site's runs oldest first and ignores site-level files", () => {
+    const root = `${scratch}/runs-list`;
+    for (const r of ["2026-08-27/09-00-00", "2026-08-26/19-04-47", "2026-08-26/21-00-00"]) mkdirSync(`${root}/example.com/${r}/wide`, { recursive: true });
+    mkdirSync(`${root}/example.com/personas`, { recursive: true });
+    assert.deepEqual(runDirs("example.com", root).map((r) => r.slice(-19)), ["2026-08-26/19-04-47", "2026-08-26/21-00-00", "2026-08-27/09-00-00"]);
+    assert.deepEqual(runDirs("missing.com", root), []);
   });
 });
 
@@ -106,10 +127,10 @@ describe("findSessionDirs", () => {
 });
 
 describe("dirLabel", () => {
-  it("shows site/date/run rather than just the leaf", () => {
+  it("shows the path under runs/ rather than just the leaf", () => {
     assert.equal(
-      dirLabel("/Users/x/proj/runs/example.com/2026-08-26/19-04-47-cold"),
-      "example.com/2026-08-26/19-04-47-cold",
+      dirLabel("/Users/x/proj/runs/example.com/2026-08-26/19-04-47/wide/haiku/19-04-47-cold"),
+      "example.com/2026-08-26/19-04-47/wide/haiku/19-04-47-cold",
     );
   });
 

@@ -128,6 +128,9 @@ SPREAD ACROSS THESE CIRCUMSTANCES TOO (independent of tier):
 - reading style: at least one who skims (non-native English reader, or in a hurry)
 ${count >= 4 ? '- accessibility: at least one with a real constraint (keyboard-only, screen reader, low vision) reflected in their traits\n' : ""}
 STRICT RULES:
+- Names are one word each, taken from Greek or Roman mythology, and lesser-known
+  (Egeria, Momus, Laodike, Palaemon, Carmenta, Iphis — not Zeus, Apollo, Venus).
+  Never a modern or generic name (no John, Priya, Jane Doe). No name twice.
 - Any two personas must differ on at least THREE of the axes above.
 - No trait may appear in two personas.
 - Each persona needs a different COMPLETE condition in its goal.
@@ -138,7 +141,7 @@ STRICT RULES:
 Reply ONLY with a JSON array:
 [{
   "id": "kebab-case-unique-id",
-  "name": "Persona Name (Role)",
+  "name": "Mythname (Role)",
   "temperature": "cold"|"warm"|"hot",
   "goal": "first-person goal including their personal COMPLETE condition",
   "tech_comfort": "low"|"medium"|"high",

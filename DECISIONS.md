@@ -23,6 +23,78 @@ mechanical work. If you cannot fill in **Why**, there is no entry to write.
 
 ---
 
+## 2026-09-14 — The site is a real application: policies, strict CSP, and a CLI that names things by site
+
+**Decided:** the website has `/privacy` and `/terms` (operator named as an
+individual in India, retention until the requester asks, the AI provider named
+as a recipient of page content), a real 404, `robots.txt`, `sitemap.xml`, and a
+Content-Security-Policy of `'self'` only — the page's script moved to `app.js`
+to make that possible. Malformed JSON on `/request` answers 400 instead of 500.
+The design went back to the earlier dark monospace frame, with the report as
+the hero panel beside a terminal. In the CLI, `--report`, `--fix` and
+`--replication` accept a site name (its newest run) or `site/date/time`;
+`--history` lists runs with their one number and seats; a run ends by printing
+the one number and the first wall; the wizard leads with the ladder and picks
+runs before sessions; `--runs` is `--random` (the old spelling still parses);
+`--no-map` skips the change check; the ladder marks its run folder and resumes
+only marked runs.
+
+**Why:** the request form collects email addresses from strangers, and a page
+that does that without saying who holds them and how to get them deleted is not
+one to send people to. Paths under the new layout are six segments deep, and
+typing them after every run was the first thing that hurt.
+
+**Measured, and reverted:** rate limiting by the *last* `x-forwarded-for` entry
+looked like the textbook fix for header spoofing. On Railway it opened the hole
+instead — 13 requests with rotating spoofed headers all passed, where the
+first-entry code had blocked at 10 — because Railway's edge writes the real
+client address first and appends the client's own header after it. The
+first-entry code stays, with that measurement in the comment.
+
+**Files:** `website/server.mjs`, `website/public/*` (untracked; deployed),
+`src/cli.ts`, `AGENTS.md`
+
+**Ref:** uncommitted
+
+## 2026-09-14 — A run is a folder: `runs/<site>/<date>/<time>/<seat>/<model>/`
+
+**Decided:** every CLI invocation that visits gets `runs/<site>/<date>/<time>/`.
+Inside it three seats — `wide/`, `verify/`, `deep/` — each holding one folder
+per model. `--report` groups sessions by run, writes `AGGREGATE.md` and
+`DETAIL.md` for the run and for each `seat/model`, derives `VERIFIED.md` from
+the verify seat's `FIXES.md` files and `REPORT.md` from the deep seat's, and
+writes `RUN.md` (seat, model, sessions, exits, tokens, minutes) from the
+sessions' own `meta.json`. The site level keeps what is known about the site
+(brief, map, personas, flow, analytics) plus a copy of the newest run's five
+files, so `runs/<site>/AGGREGATE.md` is always the latest report. `--by-model`
+is gone; per-model reports are the default. The ladder's verifier writes into
+`verify/<model>/` instead of into the sessions it reviewed, and `VERIFIER` /
+`WRITER` are two constants. Every run re-crawls the site; a changed page list
+asks whether to rebuild brief and personas. Presets and generated personas
+carry one-word, lesser-known Greek or Roman mythological names.
+
+**Why:** after today's ladder one site folder held 25 haiku sessions, 5 muse
+sessions and one opus session in the same date folders, three sonnet panels
+indistinguishable from haiku's own, and a `--by-model` flag nobody remembered
+to pass. The operator wants each run readable as a unit — who sat where, what
+came out — and the seats named by role because the models in them will change.
+Rebuilding the brief on every run costs two model calls for a page that rarely
+moves; the crawl is free, so it is the change detector. Persona names like
+"Priya Desai" read as real people in a report sent to a stranger; a one-word
+mythological name cannot be mistaken for one.
+
+**Rejected:** `data/<model>/` at the site level (built earlier today, moved
+away the same evening): it answered "how did haiku do" but not "what did this
+run produce", and mixed runs from different days under one model. Also
+rejected: a folder per day — two runs on one day would merge, and the ladder's
+"pick up where it stopped" is a rule about an unfinished run, not a date.
+
+**Files:** `src/runs.ts`, `src/runs.test.ts`, `src/cli.ts`, `src/log/pdf.ts`,
+`src/log/aggregate.ts`, `src/persona/presets.ts`, `src/persona/generate.ts`,
+`src/brain/prompt.test.ts`, `src/log/aggregate.test.ts`, `AGENTS.md`
+
+**Ref:** uncommitted
+
 ## 2026-09-14 — Alpha hardening: Chromium checked live, patience follows the flow, repeats read as repeats
 
 **Decided:** every visit launches and closes Chromium once before anything

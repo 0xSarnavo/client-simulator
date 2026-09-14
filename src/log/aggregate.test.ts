@@ -108,7 +108,7 @@ describe("generateAggregate (the short report)", () => {
     assert.match(out, /Check it yourself:\*\* open `site\.com\/pricing`.*"no price anywhere" → clicked e1/);
     assert.match(out, /DETAIL\.md/);
     assert.match(out, /risk signals, not measured traffic/);
-    assert.match(out, /Run more than once:\*\* Skeptical Sam 2\/2 abandoned/);
+    assert.match(out, /Run more than once:\*\* Momus 2\/2 abandoned/);
   });
 });
 

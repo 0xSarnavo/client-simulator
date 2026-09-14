@@ -164,7 +164,9 @@ client-simulator --doctor               # verify the environment
 client-simulator --list-personas        # every persona, built-in and custom
 client-simulator --new-persona "Name"   # build one by answering questions
 client-simulator --mailtest             # mailbox lifecycle test
-client-simulator <url> --persona marcus,marcus,marcus   # the same persona three times (test-retest); --runs draws random ones
+client-simulator <url> --persona marcus,marcus,marcus   # the same persona three times (test-retest); --random <n> draws random ones
+client-simulator --history [site]       # one line per run: date, the one number, who sat in which seat
+client-simulator --fix site-b.ai   # a site name means its newest run; site/date/time names one run
 client-simulator --orders               # run requests left on the website
 client-simulator --order <id>           # run one here, email the PDF; --reject "why" declines it
 ```
@@ -221,9 +223,9 @@ substantial saving as well as a correctness boundary.
 
 | Preset | Client | Behavior | Arrives knowing |
 |---|---|---|---|
-| `cold` | Skeptical Sam | First visit, low tech comfort, skims, distrusts forms/jargon, low patience | **nothing** |
-| `warm` | Curious Chloe | Comparing options, wants pricing/features, tolerates minor friction | the arrival paragraph from `SITE.md` |
-| `hot` | Ready Rahul | Decided to buy, goes straight to signup, bails only when truly blocked | that, plus what it does, costs, and how signup works |
+| `cold` | Momus | First visit, low tech comfort, skims, distrusts forms/jargon, low patience | **nothing** |
+| `warm` | Egeria | Comparing options, wants pricing/features, tolerates minor friction | the arrival paragraph from `SITE.md` |
+| `hot` | Felicitas | Decided to buy, goes straight to signup, bails only when truly blocked | that, plus what it does, costs, and how signup works |
 
 That last column is `arrivalFor()` in `src/site/brief.ts`, and it is load-bearing.
 The three temperatures are three amounts of prior research, which is most of what
@@ -407,24 +409,46 @@ runs/
     SITE.md                      # what the page sells, its walls, its tripwires
     MAP.md, map.json             # crawler's view: pages by kind, booking/payment surfaces
     personas/                    # the prospects generated for this product
-    AGGREGATE.md                 # the short report: one number, the walls, developer refs (after report)
-    DETAIL.md                    # every session, every table, every quote — the appendix
-    .aggregate-manifest.json     # stage-2 up-to-date check
-    <YYYY-MM-DD>/
-      <HH-MM-SS>-<persona>/
-        session.jsonl            # one event per step: url, thought, emotion, confusion, action
-        shots/                   # step screenshots
-        video.webm               # full browser recording (VP8 WebM)
-        report.md                # verdict + drop-off analysis + timeline + confusion curve
-        meta.json                # metadata for stages 2-3, incl. brain/model/effort
-        FIXES.md                 # expert panel findings (after stage 3)
+    FLOW.md, analytics.json      # the flow under test; the owner's real-visitor numbers (optional)
+    RUN.md, AGGREGATE.md, DETAIL.md, VERIFIED.md, REPORT.md   # copies of the newest run's files
+    <YYYY-MM-DD>/<HH-MM-SS>/     # one run = one CLI invocation
+      RUN.md                     # which model sat in which seat, how sessions ended, tokens, minutes
+      AGGREGATE.md               # the short report over the run: one number, the walls, developer refs
+      DETAIL.md                  # every session, every table, every quote — the appendix
+      VERIFIED.md                # --ladder: the verifier seat's panels over the sessions the filter chose
+      REPORT.md                  # --ladder: the writer seat's panel over its own deep session
+      .aggregate-manifest.json   # stage-2 up-to-date check
+      wide/<model>/              # the sweep, one folder per model (haiku, opencode-muse-spark-…)
+        AGGREGATE.md, DETAIL.md  # the same two reports over this model's sessions only
+        <HH-MM-SS>-<persona>/
+          session.jsonl          # one event per step: url, thought, emotion, confusion, action
+          shots/                 # step screenshots
+          video.webm             # full browser recording (VP8 WebM)
+          report.md              # verdict + drop-off analysis + timeline + confusion curve
+          meta.json              # metadata for stages 2-3, incl. brain/model/effort
+          FIXES.md               # expert panel findings (after stage 3)
+      verify/<model>/            # the verifier's FIXES.md per chosen session (no sessions of its own)
+        <HH-MM-SS>-<persona>/FIXES.md
+      deep/<model>/              # the writer's own session, same files as a wide one
 .clientsimulator-state.json  # doctor verification cache (gitignored)
 .env                   # mail config (gitignored)
 ```
 
+Three seats, any model in each: `wide` is the sweep, `verify` reviews what the
+replication filter chose, `deep` re-walks the hardest prospect and writes what a
+founder reads. A plain run fills only `wide`; `--ladder` fills all three
+(haiku + muse-spark, sonnet, opus today — `VERIFIER` and `WRITER` in `cli.ts`).
+Every run re-crawls the site once per process; when the page list changed since
+`map.json` was written it asks whether to rebuild the brief and personas,
+otherwise reuses them. `--no-map` skips the check. A run ends by printing the
+one number and the first wall from its AGGREGATE.md, so the file is for sharing,
+not for finding out. `--ladder` marks its run folder with `.ladder` and resumes
+only such a run from the same day when it has no REPORT.md yet.
+
 Session directories are found by walking `runs/` for any folder containing a
-`meta.json`, so the nesting depth is not load-bearing — you can reorganise sites
-into subfolders and stages 2-3 still find everything.
+`meta.json`, so the nesting depth is not load-bearing — stages 2-3 find sessions
+in any layout, and `--report` groups them by run folder (or by site when there is
+none).
 
 `video.webm` is VP8. QuickTime cannot play it; use a browser or VLC.
 
